@@ -3,7 +3,7 @@ API v1 router - aggregates all endpoint routers.
 """
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import evaluation, auth
+from app.api.v1.endpoints import evaluation, auth, soe
 
 api_router = APIRouter()
 
@@ -17,4 +17,9 @@ api_router.include_router(
     evaluation.router,
     prefix="/evaluation",
     tags=["Evaluation"]
+)
+api_router.include_router(
+    soe.router,
+    prefix="/soe",
+    tags=["SOE - Speech Evaluation"]
 )
