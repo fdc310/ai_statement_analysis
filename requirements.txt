@@ -1,0 +1,24 @@
+# Web Framework
+fastapi>=0.104.0
+uvicorn>=0.24.0
+python-multipart>=0.0.6
+
+# Tencent Cloud SDK (for Hunyuan)
+tencentcloud-sdk-python-common[async]
+tencentcloud-sdk-python-hunyuan
+
+# WebSocket (for SOE/ASR SDK)
+websocket-client>=1.6.0
+requests>=2.31.0
+
+# Encryption
+pycryptodome>=3.19.0
+
+# HTTP Client
+httpx>=0.25.0
+aiohttp>=3.9.0
+
+# Utils
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+python-dotenv>=1.0.0
