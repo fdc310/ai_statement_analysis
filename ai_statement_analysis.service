@@ -1,0 +1,15 @@
+[Unit]
+Description=AI Statement Analysis API Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/ai_statement_analysis
+Environment="PATH=/opt/ai_statement_analysis/venv/bin"
+ExecStart=/opt/ai_statement_analysis/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  api:
+    build: .
+    container_name: ai_statement_analysis
+    ports:
+      - "8000:8000"
+    environment:
+      - TENCENT_SECRET_ID=${TENCENT_SECRET_ID}
+      - TENCENT_SECRET_KEY=${TENCENT_SECRET_KEY}
+      - TENCENT_APPID=${TENCENT_APPID}
+      - AES_KEY=${AES_KEY}
+      - AES_IV=${AES_IV}
+      - REQUEST_EXPIRE_SECONDS=300
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+    volumes:
+      - ./uploads:/app/uploads
+    restart: unless-stopped
