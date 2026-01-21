@@ -10,6 +10,7 @@ These endpoints:
 import uuid
 import asyncio
 import os
+import string
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Header, BackgroundTasks
 from typing import Optional
 
@@ -25,7 +26,9 @@ from app.schemas.evaluation import (
     EvaluationStatistics,
     WordScore,
     SignatureRequest,
-    SignatureResponse
+    SignatureResponse,
+    ReportRequest,
+    ReportResponse
 )
 from app.services.tencent import asr_service, soe_service, hunyuan_service
 
@@ -442,5 +445,320 @@ async def evaluate_speech_upload(
             success=False,
             message="Evaluation failed",
             message_id=msg_id,
+            error=str(e)
+        )
+
+
+@router.post("/report", response_model=ReportResponse)
+async def generate_report(
+    request: ReportRequest,
+    x_signature: Optional[str] = Header(None, alias="X-Signature")
+) -> ReportResponse:
+    """
+    Generate AI evaluation report from pre-existing SOE scores (synchronous).
+
+    This endpoint receives SOE evaluation results and generates an AI report directly.
+    If speech_text is not provided, ASR will be called to transcribe the audio.
+
+    **Features**:
+    - Receives full SOE result data
+    - Optional ASR transcription (if speech_text not provided)
+    - Topic relevance analysis (if topic provided)
+    - Speech rate calculation (if audio_duration provided)
+
+    **Headers**:
+    - X-Signature: AES encrypted signature (required)
+
+    **Request body**:
+    ```json
+    {
+        "audio_url": "https://example.com/audio.mp3",
+        "speech_text": "可选，不传则自动ASR识别",
+        "soe_result": {
+            "SuggestedScore": 85.5,
+            "PronAccuracy": 90.2,
+            "PronFluency": 88.0,
+            "PronCompletion": 95.0,
+            "Words": [...]
+        },
+        "audio_duration": 60.5,
+        "topic": "环境保护",
+        "custom_prompt": "optional custom evaluation prompt",
+        "message_id": "optional-custom-id",
+        "language": "zh"
+    }
+    ```
+
+    **Response**:
+    ```json
+    {
+        "success": true,
+        "message": "Report generated successfully",
+        "message_id": "uuid",
+        "audio_url": "https://example.com/audio.mp3",
+        "speech_text": "转写文本",
+        "speech_rate": 180.5,
+        "evaluation_report": "# AI Evaluation Report\\n..."
+    }
+    ```
+    """
+    # Verify signature from header
+    verify_signature(x_signature)
+
+    # Generate message_id if not provided
+    msg_id = request.message_id or str(uuid.uuid4())
+    audio_url = str(request.audio_url)
+
+    try:
+        speech_text = request.speech_text
+
+        # If speech_text not provided, call ASR
+        if not speech_text:
+            # Download audio and run ASR
+            audio_data = await asr_service.download_audio(request.audio_url)
+            engine_type = "16k_zh" if request.language == "zh" else "16k_en"
+            asr_result = await asr_service.recognize_audio(audio_data, engine_type)
+            speech_text = asr_result.get("text", "")
+
+        # Calculate speech rate if audio_duration provided
+        speech_rate = None
+        if request.audio_duration and request.audio_duration > 0 and speech_text:
+            # Calculate characters/words per minute
+            if request.language == "zh":
+                # Chinese: count characters (excluding spaces and punctuation)
+                punctuation = string.punctuation + '。，！？、；：""''（）【】《》…—'
+                char_count = len([c for c in speech_text if c not in punctuation and not c.isspace()])
+            else:
+                # English: count words
+                char_count = len(speech_text.split())
+
+            # Convert to per minute
+            speech_rate = round(char_count / (request.audio_duration / 60), 1)
+
+        # Extract scores from SOE result (direct result data, no nesting)
+        result_data = request.soe_result
+
+        scores_data = {
+            "pronunciation_accuracy": result_data.get("PronAccuracy", 0),
+            "pronunciation_fluency": result_data.get("PronFluency", 0),
+            "pronunciation_completion": result_data.get("PronCompletion", 0),
+            "suggested_score": result_data.get("SuggestedScore", 0),
+            "overall_score": result_data.get("SuggestedScore", 0)
+        }
+
+        # Extract low score words
+        low_score_words_data = []
+        words = result_data.get("Words", [])
+        for word in words:
+            accuracy = word.get("PronAccuracy", 100)
+            if accuracy < 90:
+                low_score_words_data.append({
+                    "word": word.get("Word", ""),
+                    "accuracy": accuracy,
+                    "fluency": word.get("PronFluency", 0)
+                })
+
+        # Calculate statistics
+        statistics_data = {
+            "total_words": len(words),
+            "average_accuracy": sum(w.get("PronAccuracy", 0) for w in words) / len(words) if words else 0,
+            "low_score_count": len(low_score_words_data)
+        }
+
+        # Generate AI evaluation report with extended features
+        evaluation_report = await hunyuan_service.generate_evaluation_extended(
+            speech_text=speech_text,
+            speech_scores=scores_data,
+            custom_prompt=request.custom_prompt,
+            low_score_words=low_score_words_data,
+            statistics=statistics_data,
+            topic=request.topic,
+            speech_rate=speech_rate,
+            audio_duration=request.audio_duration
+        )
+
+        return ReportResponse(
+            success=True,
+            message="Report generated successfully",
+            message_id=msg_id,
+            audio_url=audio_url,
+            speech_text=speech_text,
+            speech_rate=speech_rate,
+            evaluation_report=evaluation_report
+        )
+
+    except Exception as e:
+        return ReportResponse(
+            success=False,
+            message="Report generation failed",
+            message_id=msg_id,
+            audio_url=audio_url,
+            error=str(e)
+        )
+
+
+@router.post("/report/upload", response_model=ReportResponse)
+async def generate_report_upload(
+    file: UploadFile = File(..., description="音频文件"),
+    soe_result: str = Form(..., description="SOE评测返回的result数据(JSON字符串)"),
+    speech_text: Optional[str] = Form(None, description="语音转写文本，不传则自动调用ASR识别"),
+    audio_duration: Optional[float] = Form(None, description="音频时长（秒），用于计算语速"),
+    topic: Optional[str] = Form(None, description="演讲主题，用于分析内容贴题性。不传则为自由说模式"),
+    custom_prompt: Optional[str] = Form(None, description="自定义AI评测提示词"),
+    message_id: Optional[str] = Form(None, description="消息ID，不传则自动生成UUID"),
+    language: str = Form("zh", description="语言：'zh'中文，'en'英文"),
+    x_signature: Optional[str] = Header(None, alias="X-Signature")
+) -> ReportResponse:
+    """
+    Upload audio file and generate AI evaluation report from SOE scores (synchronous).
+
+    This endpoint receives an uploaded audio file and SOE evaluation results,
+    then generates an AI report directly. If speech_text is not provided,
+    ASR will be called to transcribe the audio.
+
+    **Features**:
+    - Upload audio file directly
+    - Receives SOE result data as JSON string
+    - Optional ASR transcription (if speech_text not provided)
+    - Topic relevance analysis (if topic provided)
+    - Speech rate calculation (if audio_duration provided)
+
+    **Headers**:
+    - X-Signature: AES encrypted signature (required)
+
+    **Form data**:
+    - file: 音频文件
+    - soe_result: SOE评测结果(JSON字符串)，如 {"SuggestedScore": 85.5, "PronAccuracy": 90.2, ...}
+    - speech_text: 可选，语音转写文本
+    - audio_duration: 可选，音频时长（秒）
+    - topic: 可选，演讲主题
+    - custom_prompt: 可选，自定义评测提示词
+    - message_id: 可选，消息ID
+    - language: 语言，默认 "zh"
+
+    **Response**:
+    ```json
+    {
+        "success": true,
+        "message": "Report generated successfully",
+        "message_id": "uuid",
+        "audio_url": "",
+        "speech_text": "转写文本",
+        "speech_rate": 180.5,
+        "evaluation_report": "# AI Evaluation Report\\n..."
+    }
+    ```
+    """
+    import json
+    import re
+
+    # Verify signature from header
+    verify_signature(x_signature)
+
+    # Generate message_id if not provided
+    msg_id = message_id or str(uuid.uuid4())
+
+    try:
+        # Parse soe_result JSON string
+        try:
+            result_data = json.loads(soe_result)
+        except json.JSONDecodeError:
+            return ReportResponse(
+                success=False,
+                message="Invalid soe_result JSON format",
+                message_id=msg_id,
+                audio_url="",
+                error="soe_result must be a valid JSON string"
+            )
+
+        # Read uploaded file
+        audio_data = await file.read()
+        if len(audio_data) == 0:
+            return ReportResponse(
+                success=False,
+                message="Audio file is empty",
+                message_id=msg_id,
+                audio_url="",
+                error="Uploaded audio file is empty"
+            )
+
+        text = speech_text
+
+        # If speech_text not provided, call ASR
+        if not text:
+            engine_type = "16k_zh" if language == "zh" else "16k_en"
+            asr_result = await asr_service.recognize_audio(audio_data, engine_type)
+            text = asr_result.get("text", "")
+
+        # Calculate speech rate if audio_duration provided
+        speech_rate = None
+        if audio_duration and audio_duration > 0 and text:
+            # Calculate characters/words per minute
+            if language == "zh":
+                # Chinese: count characters (excluding spaces and punctuation)
+                punctuation = string.punctuation + '。，！？、；：""''（）【】《》…—'
+                char_count = len([c for c in text if c not in punctuation and not c.isspace()])
+            else:
+                # English: count words
+                char_count = len(text.split())
+
+            # Convert to per minute
+            speech_rate = round(char_count / (audio_duration / 60), 1)
+
+        scores_data = {
+            "pronunciation_accuracy": result_data.get("PronAccuracy", 0),
+            "pronunciation_fluency": result_data.get("PronFluency", 0),
+            "pronunciation_completion": result_data.get("PronCompletion", 0),
+            "suggested_score": result_data.get("SuggestedScore", 0),
+            "overall_score": result_data.get("SuggestedScore", 0)
+        }
+
+        # Extract low score words
+        low_score_words_data = []
+        words = result_data.get("Words", [])
+        for word in words:
+            accuracy = word.get("PronAccuracy", 100)
+            if accuracy < 90:
+                low_score_words_data.append({
+                    "word": word.get("Word", ""),
+                    "accuracy": accuracy,
+                    "fluency": word.get("PronFluency", 0)
+                })
+
+        # Calculate statistics
+        statistics_data = {
+            "total_words": len(words),
+            "average_accuracy": sum(w.get("PronAccuracy", 0) for w in words) / len(words) if words else 0,
+            "low_score_count": len(low_score_words_data)
+        }
+
+        # Generate AI evaluation report with extended features
+        evaluation_report = await hunyuan_service.generate_evaluation_extended(
+            speech_text=text,
+            speech_scores=scores_data,
+            custom_prompt=custom_prompt,
+            low_score_words=low_score_words_data,
+            statistics=statistics_data,
+            topic=topic,
+            speech_rate=speech_rate,
+            audio_duration=audio_duration
+        )
+
+        return ReportResponse(
+            success=True,
+            message="Report generated successfully",
+            message_id=msg_id,
+            audio_url="",
+            speech_text=text,
+            speech_rate=speech_rate,
+            evaluation_report=evaluation_report
+        )
+
+    except Exception as e:
+        return ReportResponse(
+            success=False,
+            message="Report generation failed",
+            message_id=msg_id,
+            audio_url="",
             error=str(e)
         )

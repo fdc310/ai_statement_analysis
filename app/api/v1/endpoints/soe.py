@@ -203,37 +203,66 @@ def sync_evaluate(
 @router.post("/upload", response_model=SOEResponse)
 async def upload_and_assess(
     file: UploadFile = File(..., description="Audio file"),
-    ref_text: str = Form(default="", description="Reference text (optional for free speech mode)"),
-    engine_model_type: str = Form(default="16k_zh", description="Engine model: 16k_en (English), 16k_zh (Chinese)"),
-    text_mode: int = Form(default=0, description="Text mode"),
-    eval_mode: int = Form(default=3, description="Evaluation mode: 0=word, 1=sentence, 2=paragraph, 3=free speech"),
-    score_coeff: float = Form(default=2.0, ge=1.0, le=4.0, description="Score coefficient: 1.0=children, 2.0=standard, 4.0=strict"),
-    keyword: str = Form(default="", description="Keywords"),
-    sentence_info_enabled: int = Form(default=0, description="Sentence info: 0=off, 1=on"),
-    message_id: Optional[str] = Form(default=None, description="Message ID for tracking (auto-generated if not provided)"),
+    ref_text: str = Form(default="", description="被评估语音对应的文本。句子模式≤30字/词，段落模式≤120字/词，自由说模式可不填"),
+    engine_model_type: str = Form(default="16k_zh", description="语言引擎：16k_zh(中文)，16k_en(英文)"),
+    text_mode: int = Form(default=0, description="文本模式：0=普通文本(默认)，1=音素结构文本"),
+    eval_mode: int = Form(default=3, description="评测模式：0=单词/单字，1=句子，2=段落，3=自由说，4=单词音素纠错，5=情景评测，6=句子多分支，7=单词实时，8=拼音评测"),
+    score_coeff: float = Form(default=2.0, ge=1.0, le=4.0, description="评价苛刻指数：1.0=儿童(宽松)，2.0=标准，4.0=成人(严格)"),
+    keyword: str = Form(default="", description="主题词和关键词"),
+    sentence_info_enabled: int = Form(default=0, description="输出断句中间结果：0=不输出(默认)，1=输出"),
+    message_id: Optional[str] = Form(default=None, description="消息ID，不传则自动生成UUID"),
     x_signature: Optional[str] = Header(None, alias="X-Signature")
 ) -> SOEResponse:
     """
-    Upload audio file for speech evaluation.
+    上传音频文件进行语音评测。
 
-    **Authentication**: X-Signature header with AES encrypted signature
+    **认证方式**: X-Signature Header 携带 AES 加密签名
 
-    **Supported formats**: Any format supported by ffmpeg (wav, mp3, m4a, ogg, flac, etc.)
+    **支持格式**: ffmpeg 支持的所有格式 (wav, mp3, m4a, ogg, flac 等)
 
-    **Audio processing**:
-    - Automatically converted to 16kHz, 16bit, mono WAV
-    - Maximum duration: 300 seconds
+    **音频处理**: 自动转换为 16kHz, 16bit, 单声道 WAV
 
-    **Evaluation modes**:
-    - 0: Word/character mode
-    - 1: Sentence mode
-    - 2: Paragraph mode
-    - 3: Free speech mode (default)
+    ---
 
-    **Score coefficient**:
-    - 1.0: For children
-    - 2.0: Standard (default)
-    - 4.0: Strict for adults
+    ## 参数说明
+
+    **text_mode 文本模式**:
+    | 值 | 说明 |
+    |---|---|
+    | 0 | 普通文本（默认） |
+    | 1 | 音素结构文本（用于自定义注音） |
+
+    **eval_mode 评测模式**:
+    | 值 | 说明 |
+    |---|---|
+    | 0 | 单词/单字模式（中文为单字模式） |
+    | 1 | 句子模式 |
+    | 2 | 段落模式 |
+    | 3 | 自由说模式（默认） |
+    | 4 | 单词音素纠错模式 |
+    | 5 | 情景评测模式 |
+    | 6 | 句子多分支评测模式 |
+    | 7 | 单词实时评测模式 |
+    | 8 | 拼音评测模式 |
+
+    **score_coeff 评价苛刻指数**:
+    | 值 | 说明 |
+    |---|---|
+    | 1.0 | 儿童应用场景（宽松） |
+    | 2.0 | 标准（默认） |
+    | 4.0 | 成人严格打分场景 |
+
+    **ref_text 参考文本**:
+    - 句子模式：不超过 30 个单词或中文文字
+    - 段落模式：不超过 120 个单词或中文文字
+    - 自由说模式：可不填
+    - 中文使用 UTF-8 编码
+
+    **sentence_info_enabled 断句中间结果**:
+    | 值 | 说明 |
+    |---|---|
+    | 0 | 不输出（默认） |
+    | 1 | 输出，用于客户端 UI 实时更新 |
     """
     verify_signature(x_signature)
 
@@ -323,25 +352,74 @@ async def assess_from_url(
     x_signature: Optional[str] = Header(None, alias="X-Signature")
 ) -> SOEResponse:
     """
-    Evaluate speech from audio URL.
+    通过音频 URL 进行语音评测。
 
-    **Authentication**: X-Signature header with AES encrypted signature
+    **认证方式**: X-Signature Header 携带 AES 加密签名
 
-    **Supported formats**: Any format supported by ffmpeg (wav, mp3, m4a, ogg, flac, etc.)
+    **支持格式**: ffmpeg 支持的所有格式 (wav, mp3, m4a, ogg, flac 等)
 
-    **Audio processing**:
-    - Automatically converted to 16kHz, 16bit, mono WAV
-    - Maximum file size: 50MB
-    - Maximum duration: 300 seconds
+    **限制**:
+    - 文件大小：最大 50MB
+    - 音频时长：最大 300 秒
+    - 自动转换为 16kHz, 16bit, 单声道 WAV
 
-    **Request body example**:
+    ---
+
+    ## 参数说明
+
+    **text_mode 文本模式**:
+    | 值 | 说明 |
+    |---|---|
+    | 0 | 普通文本（默认） |
+    | 1 | 音素结构文本（用于自定义注音） |
+
+    **eval_mode 评测模式**:
+    | 值 | 说明 |
+    |---|---|
+    | 0 | 单词/单字模式（中文为单字模式） |
+    | 1 | 句子模式 |
+    | 2 | 段落模式 |
+    | 3 | 自由说模式（默认） |
+    | 4 | 单词音素纠错模式 |
+    | 5 | 情景评测模式 |
+    | 6 | 句子多分支评测模式 |
+    | 7 | 单词实时评测模式 |
+    | 8 | 拼音评测模式 |
+
+    **score_coeff 评价苛刻指数**:
+    | 值 | 说明 |
+    |---|---|
+    | 1.0 | 儿童应用场景（宽松） |
+    | 2.0 | 标准（默认） |
+    | 4.0 | 成人严格打分场景 |
+
+    **ref_text 参考文本**:
+    - 句子模式：不超过 30 个单词或中文文字
+    - 段落模式：不超过 120 个单词或中文文字
+    - 自由说模式：可不填
+    - 中文使用 UTF-8 编码
+
+    **sentence_info_enabled 断句中间结果**:
+    | 值 | 说明 |
+    |---|---|
+    | 0 | 不输出（默认） |
+    | 1 | 输出，用于客户端 UI 实时更新 |
+
+    ---
+
+    ## 请求示例
+
     ```json
     {
         "audio_url": "https://example.com/audio.mp3",
         "ref_text": "",
         "engine_model_type": "16k_zh",
+        "text_mode": 0,
         "eval_mode": 3,
-        "score_coeff": 2.0
+        "score_coeff": 2.0,
+        "keyword": "",
+        "sentence_info_enabled": 0,
+        "message_id": "optional-custom-id"
     }
     ```
     """

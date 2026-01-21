@@ -161,3 +161,29 @@ class SignatureResponse(BaseModel):
     timestamp: Optional[int] = Field(None, description="Timestamp used in signature")
     expires_in: Optional[int] = Field(None, description="Seconds until signature expires")
     error: Optional[str] = Field(None, description="Error message if failed")
+
+
+class ReportRequest(BaseModel):
+    """Request model for AI report generation with pre-existing SOE scores."""
+
+    audio_url: HttpUrl = Field(..., description="音频文件URL")
+    speech_text: Optional[str] = Field(None, description="语音转写文本，不传则自动调用ASR识别")
+    soe_result: dict = Field(..., description="SOE评测返回的result数据，包含SuggestedScore、PronAccuracy、Words等字段")
+    audio_duration: Optional[float] = Field(None, description="音频时长（秒），用于计算语速")
+    topic: Optional[str] = Field(None, description="演讲主题，用于分析内容贴题性。不传则为自由说模式")
+    custom_prompt: Optional[str] = Field(None, description="自定义AI评测提示词")
+    message_id: Optional[str] = Field(None, description="消息ID，不传则自动生成UUID")
+    language: str = Field(default="zh", description="语言：'zh'中文，'en'英文，用于ASR识别")
+
+
+class ReportResponse(BaseModel):
+    """Response model for AI report generation."""
+
+    success: bool = Field(..., description="是否成功")
+    message: str = Field(..., description="状态消息")
+    message_id: str = Field(..., description="消息ID")
+    audio_url: str = Field(..., description="音频URL")
+    speech_text: Optional[str] = Field(None, description="语音转写文本（ASR识别结果）")
+    speech_rate: Optional[float] = Field(None, description="语速（字/分钟或词/分钟）")
+    evaluation_report: Optional[str] = Field(None, description="AI生成的Markdown格式评测报告")
+    error: Optional[str] = Field(None, description="错误信息")
