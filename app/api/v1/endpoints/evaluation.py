@@ -3,8 +3,9 @@
 Speech evaluation endpoints with async callback support and AES signature authentication.
 Signature is passed via X-Signature header.
 
-These endpoints accept evaluation tasks and return immediately with a message_id.
-Results are sent to the callback_url when processing completes.
+These endpoints:
+1. Immediately return ASR + SOE results (speech_text, speech_scores, etc.)
+2. Generate AI report in background and send to callback_url when complete
 """
 import uuid
 import asyncio
@@ -45,7 +46,7 @@ def verify_signature(signature: Optional[str]) -> None:
 
 
 async def send_callback(callback_url: str, data: EvaluationCallbackData) -> None:
-    """Send evaluation results to callback URL."""
+    """Send AI report to callback URL."""
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
@@ -58,61 +59,17 @@ async def send_callback(callback_url: str, data: EvaluationCallbackData) -> None
         print(f"[CALLBACK ERROR] Failed to send to {callback_url}: {str(e)}")
 
 
-async def process_evaluation_task(
+async def generate_report_task(
     message_id: str,
     callback_url: str,
-    audio_data: bytes,
-    language: str,
-    ref_text: str,
-    custom_prompt: Optional[str]
+    speech_text: str,
+    scores_data: dict,
+    custom_prompt: Optional[str],
+    low_score_words_data: list,
+    statistics_data: dict
 ) -> None:
-    """Background task to process evaluation and send callback."""
+    """Background task to generate AI report and send callback."""
     try:
-        # Determine engine type based on language
-        engine_type = "16k_zh" if language == "zh" else "16k_en"
-        server_type = 0 if language == "zh" else 1
-
-        # Run ASR and SOE in parallel
-        asr_result, soe_result = await asyncio.gather(
-            asr_service.recognize_audio(audio_data, engine_type),
-            soe_service.evaluate_audio(
-                audio_data,
-                ref_text or "",
-                3 if not ref_text else 1,
-                1.0,
-                server_type
-            )
-        )
-
-        # Extract results
-        speech_text = asr_result.get("text", "")
-        scores_data = soe_result.get("scores", {})
-        low_score_words_data = soe_result.get("low_score_words", [])
-        statistics_data = soe_result.get("statistics", {})
-
-        speech_scores = SpeechScores(
-            pronunciation_accuracy=scores_data.get("pronunciation_accuracy", 0),
-            pronunciation_fluency=scores_data.get("pronunciation_fluency", 0),
-            pronunciation_completion=scores_data.get("pronunciation_completion", 0),
-            suggested_score=scores_data.get("suggested_score", 0),
-            overall_score=scores_data.get("overall_score", 0)
-        )
-
-        statistics = EvaluationStatistics(
-            total_words=statistics_data.get("total_words", 0),
-            average_accuracy=statistics_data.get("average_accuracy", 0),
-            low_score_count=statistics_data.get("low_score_count", 0)
-        )
-
-        low_score_words = [
-            WordScore(
-                word=w.get("word", ""),
-                accuracy=w.get("accuracy", 0),
-                fluency=w.get("fluency", 0)
-            )
-            for w in low_score_words_data
-        ]
-
         # Generate AI evaluation report
         evaluation_report = await hunyuan_service.generate_evaluation(
             speech_text,
@@ -126,11 +83,7 @@ async def process_evaluation_task(
         callback_data = EvaluationCallbackData(
             message_id=message_id,
             success=True,
-            message="Evaluation completed successfully",
-            speech_text=speech_text,
-            speech_scores=speech_scores,
-            statistics=statistics,
-            low_score_words=low_score_words,
+            message="AI report generated successfully",
             evaluation_report=evaluation_report
         )
         await send_callback(callback_url, callback_data)
@@ -140,7 +93,7 @@ async def process_evaluation_task(
         callback_data = EvaluationCallbackData(
             message_id=message_id,
             success=False,
-            message="Evaluation failed",
+            message="AI report generation failed",
             error=str(e)
         )
         await send_callback(callback_url, callback_data)
@@ -201,10 +154,12 @@ async def evaluate_speech(
     x_signature: Optional[str] = Header(None, alias="X-Signature")
 ) -> EvaluationAcceptedResponse:
     """
-    Submit speech evaluation task (async with callback).
+    Evaluate speech and get SOE scores immediately, AI report via callback.
 
-    The task is processed in the background. Results will be sent to the callback_url
-    when processing completes.
+    **Workflow**:
+    1. Immediately processes ASR + SOE and returns results
+    2. AI report is generated in background
+    3. When AI report is ready, it's sent to callback_url
 
     **Headers**:
     - X-Signature: AES encrypted signature (required)
@@ -221,25 +176,29 @@ async def evaluate_speech(
     }
     ```
 
-    **Response** (immediate):
+    **Response** (immediate, includes SOE scores):
     ```json
     {
         "success": true,
-        "message": "Task accepted",
-        "message_id": "uuid-or-custom-id"
+        "message": "Evaluation completed, AI report will be sent to callback URL",
+        "message_id": "uuid",
+        "speech_text": "transcribed text",
+        "speech_scores": {
+            "pronunciation_accuracy": 85.5,
+            "pronunciation_fluency": 90.2,
+            ...
+        },
+        "statistics": {...},
+        "low_score_words": [...]
     }
     ```
 
-    **Callback data** (sent to callback_url when complete):
+    **Callback data** (sent to callback_url when AI report is ready):
     ```json
     {
-        "message_id": "uuid-or-custom-id",
+        "message_id": "uuid",
         "success": true,
-        "message": "Evaluation completed successfully",
-        "speech_text": "transcribed text",
-        "speech_scores": {...},
-        "statistics": {...},
-        "low_score_words": [...],
+        "message": "AI report generated successfully",
         "evaluation_report": "markdown report"
     }
     ```
@@ -272,29 +231,81 @@ async def evaluate_speech(
                 lambda: open(request.audio_path, "rb").read()
             )
 
-        # Add background task
+        # Determine engine type based on language
+        engine_type = "16k_zh" if request.language == "zh" else "16k_en"
+        server_type = 0 if request.language == "zh" else 1
+
+        # Run ASR and SOE in parallel (synchronously wait for results)
+        asr_result, soe_result = await asyncio.gather(
+            asr_service.recognize_audio(audio_data, engine_type),
+            soe_service.evaluate_audio(
+                audio_data,
+                request.ref_text or "",
+                3 if not request.ref_text else 1,
+                1.0,
+                server_type
+            )
+        )
+
+        # Extract results
+        speech_text = asr_result.get("text", "")
+        scores_data = soe_result.get("scores", {})
+        low_score_words_data = soe_result.get("low_score_words", [])
+        statistics_data = soe_result.get("statistics", {})
+
+        speech_scores = SpeechScores(
+            pronunciation_accuracy=scores_data.get("pronunciation_accuracy", 0),
+            pronunciation_fluency=scores_data.get("pronunciation_fluency", 0),
+            pronunciation_completion=scores_data.get("pronunciation_completion", 0),
+            suggested_score=scores_data.get("suggested_score", 0),
+            overall_score=scores_data.get("overall_score", 0)
+        )
+
+        statistics = EvaluationStatistics(
+            total_words=statistics_data.get("total_words", 0),
+            average_accuracy=statistics_data.get("average_accuracy", 0),
+            low_score_count=statistics_data.get("low_score_count", 0)
+        )
+
+        low_score_words = [
+            WordScore(
+                word=w.get("word", ""),
+                accuracy=w.get("accuracy", 0),
+                fluency=w.get("fluency", 0)
+            )
+            for w in low_score_words_data
+        ]
+
+        # Add background task for AI report generation
         background_tasks.add_task(
-            process_evaluation_task,
+            generate_report_task,
             msg_id,
             callback_url,
-            audio_data,
-            request.language,
-            request.ref_text or "",
-            request.custom_prompt
+            speech_text,
+            scores_data,
+            request.custom_prompt,
+            low_score_words_data,
+            statistics_data
         )
 
         return EvaluationAcceptedResponse(
             success=True,
-            message="Task accepted, results will be sent to callback URL",
-            message_id=msg_id
+            message="Evaluation completed, AI report will be sent to callback URL",
+            message_id=msg_id,
+            speech_text=speech_text,
+            speech_scores=speech_scores,
+            statistics=statistics,
+            low_score_words=low_score_words
         )
 
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to accept task: {str(e)}"
+        return EvaluationAcceptedResponse(
+            success=False,
+            message="Evaluation failed",
+            message_id=msg_id,
+            error=str(e)
         )
 
 
@@ -306,14 +317,16 @@ async def evaluate_speech_upload(
     ref_text: Optional[str] = Form("", description="Reference text for evaluation"),
     custom_prompt: Optional[str] = Form(None, description="Custom prompt for AI evaluation"),
     message_id: Optional[str] = Form(None, description="Message ID for tracking (auto-generated if not provided)"),
-    callback_url: str = Form(..., description="Callback URL to receive evaluation results"),
+    callback_url: str = Form(..., description="Callback URL to receive AI report"),
     x_signature: Optional[str] = Header(None, alias="X-Signature")
 ) -> EvaluationAcceptedResponse:
     """
-    Submit speech evaluation task from uploaded file (async with callback).
+    Evaluate uploaded audio and get SOE scores immediately, AI report via callback.
 
-    The task is processed in the background. Results will be sent to the callback_url
-    when processing completes.
+    **Workflow**:
+    1. Immediately processes ASR + SOE and returns results
+    2. AI report is generated in background
+    3. When AI report is ready, it's sent to callback_url
 
     **Headers**:
     - X-Signature: AES encrypted signature (required)
@@ -324,14 +337,18 @@ async def evaluate_speech_upload(
     - ref_text: Optional reference text
     - custom_prompt: Optional custom prompt for AI evaluation
     - message_id: Optional message ID (auto-generated if not provided)
-    - callback_url: URL to receive results (required)
+    - callback_url: URL to receive AI report (required)
 
-    **Response** (immediate):
+    **Response** (immediate, includes SOE scores):
     ```json
     {
         "success": true,
-        "message": "Task accepted",
-        "message_id": "uuid-or-custom-id"
+        "message": "Evaluation completed, AI report will be sent to callback URL",
+        "message_id": "uuid",
+        "speech_text": "transcribed text",
+        "speech_scores": {...},
+        "statistics": {...},
+        "low_score_words": [...]
     }
     ```
     """
@@ -351,27 +368,79 @@ async def evaluate_speech_upload(
                 detail="Audio file is empty"
             )
 
-        # Add background task
+        # Determine engine type based on language
+        engine_type = "16k_zh" if language == "zh" else "16k_en"
+        server_type = 0 if language == "zh" else 1
+
+        # Run ASR and SOE in parallel (synchronously wait for results)
+        asr_result, soe_result = await asyncio.gather(
+            asr_service.recognize_audio(audio_data, engine_type),
+            soe_service.evaluate_audio(
+                audio_data,
+                ref_text or "",
+                3 if not ref_text else 1,
+                1.0,
+                server_type
+            )
+        )
+
+        # Extract results
+        speech_text = asr_result.get("text", "")
+        scores_data = soe_result.get("scores", {})
+        low_score_words_data = soe_result.get("low_score_words", [])
+        statistics_data = soe_result.get("statistics", {})
+
+        speech_scores = SpeechScores(
+            pronunciation_accuracy=scores_data.get("pronunciation_accuracy", 0),
+            pronunciation_fluency=scores_data.get("pronunciation_fluency", 0),
+            pronunciation_completion=scores_data.get("pronunciation_completion", 0),
+            suggested_score=scores_data.get("suggested_score", 0),
+            overall_score=scores_data.get("overall_score", 0)
+        )
+
+        statistics = EvaluationStatistics(
+            total_words=statistics_data.get("total_words", 0),
+            average_accuracy=statistics_data.get("average_accuracy", 0),
+            low_score_count=statistics_data.get("low_score_count", 0)
+        )
+
+        low_score_words = [
+            WordScore(
+                word=w.get("word", ""),
+                accuracy=w.get("accuracy", 0),
+                fluency=w.get("fluency", 0)
+            )
+            for w in low_score_words_data
+        ]
+
+        # Add background task for AI report generation
         background_tasks.add_task(
-            process_evaluation_task,
+            generate_report_task,
             msg_id,
             callback_url,
-            audio_data,
-            language,
-            ref_text or "",
-            custom_prompt
+            speech_text,
+            scores_data,
+            custom_prompt,
+            low_score_words_data,
+            statistics_data
         )
 
         return EvaluationAcceptedResponse(
             success=True,
-            message="Task accepted, results will be sent to callback URL",
-            message_id=msg_id
+            message="Evaluation completed, AI report will be sent to callback URL",
+            message_id=msg_id,
+            speech_text=speech_text,
+            speech_scores=speech_scores,
+            statistics=statistics,
+            low_score_words=low_score_words
         )
 
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to accept task: {str(e)}"
+        return EvaluationAcceptedResponse(
+            success=False,
+            message="Evaluation failed",
+            message_id=msg_id,
+            error=str(e)
         )

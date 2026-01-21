@@ -73,21 +73,13 @@ class EvaluationRequest(BaseModel):
 
 
 class EvaluationAcceptedResponse(BaseModel):
-    """Response model when evaluation task is accepted."""
+    """Response model when evaluation task is accepted (includes SOE scores)."""
 
     success: bool = Field(True, description="Whether the task was accepted")
     message: str = Field("Task accepted", description="Status message")
     message_id: str = Field(..., description="Message ID for tracking")
 
-
-class EvaluationCallbackData(BaseModel):
-    """Data sent to callback URL when evaluation completes."""
-
-    message_id: str = Field(..., description="Message ID for tracking")
-    success: bool = Field(..., description="Whether the evaluation succeeded")
-    message: str = Field(..., description="Status message")
-
-    # Results
+    # SOE results (returned immediately)
     speech_text: Optional[str] = Field(
         None, description="Transcribed speech text"
     )
@@ -100,13 +92,28 @@ class EvaluationCallbackData(BaseModel):
     low_score_words: Optional[List[WordScore]] = Field(
         None, description="Words with low pronunciation scores"
     )
+
+    # Error info
+    error: Optional[str] = Field(
+        None, description="Error message if SOE evaluation failed"
+    )
+
+
+class EvaluationCallbackData(BaseModel):
+    """Data sent to callback URL when AI report generation completes."""
+
+    message_id: str = Field(..., description="Message ID for tracking")
+    success: bool = Field(..., description="Whether the report generation succeeded")
+    message: str = Field(..., description="Status message")
+
+    # AI Report (sent via callback)
     evaluation_report: Optional[str] = Field(
         None, description="AI-generated evaluation report in Markdown format"
     )
 
     # Error info
     error: Optional[str] = Field(
-        None, description="Error message if evaluation failed"
+        None, description="Error message if report generation failed"
     )
 
 
