@@ -28,6 +28,7 @@ class SOEUrlRequest(BaseModel):
     score_coeff: float = Field(default=2.0, ge=1.0, le=4.0, description="Score coefficient: 1.0=children, 2.0=standard, 4.0=strict")
     keyword: str = Field(default="", description="Keywords")
     sentence_info_enabled: int = Field(default=0, description="Sentence info: 0=off, 1=on")
+    message_id: Optional[str] = Field(default=None, description="Message ID for tracking (auto-generated if not provided)")
 
 
 class AudioMeta(BaseModel):
@@ -43,6 +44,7 @@ class AudioMeta(BaseModel):
 
 class SOEResponse(BaseModel):
     """Response model for SOE evaluation."""
+    message_id: str = Field(..., description="Message ID for tracking")
     id: Optional[int] = Field(None, description="Assessment record ID")
     voice_id: str = Field(default="", description="Voice session ID")
     ref_text: str = Field(default="", description="Reference text used")

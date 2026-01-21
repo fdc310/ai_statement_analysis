@@ -63,9 +63,12 @@ async def process_audio(audio_data: bytes, filename: str) -> tuple[bytes, dict]:
     """
     original_size = len(audio_data)
 
-    # Get audio duration
-    duration = await get_audio_duration(audio_data)
-    if duration is None:
+    # Get audio duration (non-blocking, failure is OK)
+    try:
+        duration = await get_audio_duration(audio_data)
+        if duration is None:
+            duration = -1
+    except Exception:
         duration = -1
 
     # Convert to standard format
@@ -207,6 +210,7 @@ async def upload_and_assess(
     score_coeff: float = Form(default=2.0, ge=1.0, le=4.0, description="Score coefficient: 1.0=children, 2.0=standard, 4.0=strict"),
     keyword: str = Form(default="", description="Keywords"),
     sentence_info_enabled: int = Form(default=0, description="Sentence info: 0=off, 1=on"),
+    message_id: Optional[str] = Form(default=None, description="Message ID for tracking (auto-generated if not provided)"),
     x_signature: Optional[str] = Header(None, alias="X-Signature")
 ) -> SOEResponse:
     """
@@ -232,6 +236,9 @@ async def upload_and_assess(
     - 4.0: Strict for adults
     """
     verify_signature(x_signature)
+
+    # Generate message_id if not provided
+    msg_id = message_id or str(uuid.uuid4())
 
     # Read audio data
     audio_data = await file.read()
@@ -279,6 +286,7 @@ async def upload_and_assess(
     # Check for errors
     if "error" in result:
         return SOEResponse(
+            message_id=msg_id,
             eval_mode=eval_mode,
             ref_text=ref_text,
             error=result["error"]
@@ -290,6 +298,7 @@ async def upload_and_assess(
         score = result['result'].get('SuggestedScore', None)
 
     return SOEResponse(
+        message_id=msg_id,
         voice_id=result.get('voice_id', ''),
         ref_text=ref_text,
         eval_mode=eval_mode,
@@ -337,6 +346,9 @@ async def assess_from_url(
     ```
     """
     verify_signature(x_signature)
+
+    # Generate message_id if not provided
+    msg_id = request.message_id or str(uuid.uuid4())
 
     audio_url = str(request.audio_url)
 
@@ -423,6 +435,7 @@ async def assess_from_url(
     # Check for errors
     if "error" in result:
         return SOEResponse(
+            message_id=msg_id,
             eval_mode=request.eval_mode,
             ref_text=request.ref_text,
             source_url=audio_url,
@@ -435,6 +448,7 @@ async def assess_from_url(
         score = result['result'].get('SuggestedScore', None)
 
     return SOEResponse(
+        message_id=msg_id,
         voice_id=result.get('voice_id', ''),
         ref_text=request.ref_text,
         eval_mode=request.eval_mode,

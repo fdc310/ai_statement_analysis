@@ -4,7 +4,44 @@ Audio processing utilities using ffmpeg.
 import asyncio
 import tempfile
 import os
+import shutil
 from typing import Optional
+
+
+def find_executable(name: str) -> str:
+    """
+    Find executable path, checking common locations.
+
+    Args:
+        name: Executable name (e.g., 'ffmpeg', 'ffprobe')
+
+    Returns:
+        Full path to executable, or just the name if not found in common paths
+    """
+    # Try using shutil.which first (checks PATH)
+    path = shutil.which(name)
+    if path:
+        return path
+
+    # Common installation paths on Linux
+    common_paths = [
+        f"/usr/bin/{name}",
+        f"/usr/local/bin/{name}",
+        f"/opt/homebrew/bin/{name}",  # macOS Homebrew
+        f"/snap/bin/{name}",
+    ]
+
+    for p in common_paths:
+        if os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
+
+    # Return just the name, let the system try to find it
+    return name
+
+
+# Find ffmpeg and ffprobe paths
+FFMPEG_PATH = find_executable("ffmpeg")
+FFPROBE_PATH = find_executable("ffprobe")
 
 
 async def convert_audio_to_wav(
@@ -44,7 +81,7 @@ async def convert_audio_to_wav(
         # -sample_fmt: sample format (s16 = signed 16-bit)
         # -f wav: output format
         cmd = [
-            "ffmpeg",
+            FFMPEG_PATH,
             "-y",
             "-i", input_path,
             "-ar", str(sample_rate),
@@ -97,7 +134,7 @@ async def get_audio_duration(audio_data: bytes) -> Optional[float]:
 
     try:
         cmd = [
-            "ffprobe",
+            FFPROBE_PATH,
             "-v", "error",
             "-show_entries", "format=duration",
             "-of", "default=noprint_wrappers=1:nokey=1",
