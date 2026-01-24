@@ -515,7 +515,7 @@ async def generate_report(
         # If speech_text not provided, call ASR
         if not speech_text:
             # Download audio and run ASR
-            audio_data = await asr_service.download_audio(request.audio_url)
+            audio_data = await asr_service.download_audio(audio_url)
             engine_type = "16k_zh" if request.language == "zh" else "16k_en"
             asr_result = await asr_service.recognize_audio(audio_data, engine_type)
             speech_text = asr_result.get("text", "")
