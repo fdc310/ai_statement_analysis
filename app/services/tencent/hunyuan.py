@@ -453,5 +453,284 @@ class HunyuanService(TencentCloudClient):
         return prompt
 
 
+    async def analyze_text_structure(
+        self,
+        text: str,
+        custom_prompt: Optional[str] = None
+    ) -> str:
+        """
+        Analyze text structure: core ideas, logical structure, key points.
+
+        Args:
+            text: Text content to analyze
+            custom_prompt: Optional custom analysis requirements
+
+        Returns:
+            Analysis result in Markdown format
+        """
+        system_prompt = """你是一个专业的文本分析专家。你的任务是分析用户提供的文本，提取其核心思想和逻辑结构。
+
+你必须严格按照以下JSON格式输出分析结果：
+
+```json
+{
+    "core_idea": "文本的核心思想/主旨，用一两句话概括",
+    "key_points": [
+        {
+            "title": "要点标题",
+            "content": "要点详细内容",
+            "importance": "高/中/低"
+        }
+    ],
+    "logical_structure": {
+        "type": "结构类型（如：总分总、递进式、并列式、对比式、因果式等）",
+        "description": "对逻辑结构的简要说明",
+        "outline": [
+            {
+                "level": 1,
+                "title": "一级标题/段落主题",
+                "summary": "该部分的简要概括",
+                "sub_points": [
+                    {
+                        "level": 2,
+                        "title": "二级要点",
+                        "summary": "要点说明"
+                    }
+                ]
+            }
+        ]
+    },
+    "arguments": [
+        {
+            "claim": "论点/观点",
+            "evidence": "支撑论据",
+            "reasoning": "论证逻辑"
+        }
+    ],
+    "conclusion": "结论或总结",
+    "writing_style": "写作风格特点",
+    "suggestions": [
+        "改进建议1",
+        "改进建议2"
+    ]
+}
+```
+
+分析要求：
+1. 核心思想要精准概括，抓住文本的中心主旨
+2. 关键要点要分点列出，标注重要程度
+3. 逻辑结构要清晰展示文本的组织方式
+4. 论点论据要分析清楚论证过程
+5. 改进建议要具体可行
+
+注意：
+- 必须严格按照JSON格式输出
+- 如果某些部分在文本中不明显，可以标注为null或空数组
+- 分析要客观中立，基于文本内容"""
+
+        user_prompt = f"""请分析以下文本的核心思想和逻辑结构：
+
+## 待分析文本
+
+{text}
+"""
+
+        if custom_prompt:
+            user_prompt += f"""
+## 额外分析要求
+
+{custom_prompt}
+"""
+
+        user_prompt += """
+请严格按照JSON格式输出分析结果。"""
+
+        messages = [
+            {"Role": "system", "Content": system_prompt},
+            {"Role": "user", "Content": user_prompt}
+        ]
+
+        result = await self.chat(messages, temperature=0.3)
+        return result["content"]
+
+    async def analyze_tongue_twister(
+        self,
+        text: str,
+        language: str = "zh"
+    ) -> str:
+        """
+        Analyze tongue twister pronunciation key points.
+
+        Args:
+            text: Tongue twister text to analyze
+            language: Language code ('zh' for Chinese, 'en' for English)
+
+        Returns:
+            Analysis result in JSON format
+        """
+        if language == "zh":
+            system_prompt = """你是一个专业的语音学和发音教学专家。你的任务是分析绕口令的发音要点，帮助用户更好地练习发音。
+
+你必须严格按照以下JSON格式输出分析结果：
+
+```json
+{
+    "title": "绕口令标题/主题",
+    "difficulty": "难度等级（简单/中等/困难/专家）",
+    "core_phonemes": [
+        {
+            "phoneme": "音素（如：b、p、m、f等）",
+            "pinyin": "对应拼音",
+            "ipa": "国际音标",
+            "description": "发音描述",
+            "articulation": {
+                "manner": "发音方式（如：爆破音、摩擦音、鼻音等）",
+                "place": "发音部位（如：双唇、舌尖、舌根等）",
+                "voicing": "清浊（清音/浊音）"
+            },
+            "examples": ["包含该音素的字词示例"]
+        }
+    ],
+    "acoustic_features": [
+        {
+            "feature": "声学特征名称",
+            "description": "特征描述",
+            "key_difference": "与易混淆音的关键差异",
+            "measurement": "可量化的声学指标（如：VOT、F1/F2频率等）"
+        }
+    ],
+    "confusion_pairs": [
+        {
+            "pair": ["音素1", "音素2"],
+            "difference": "区分要点",
+            "common_errors": "常见错误",
+            "practice_tip": "练习建议"
+        }
+    ],
+    "pronunciation_tips": [
+        {
+            "tip": "发音提示",
+            "target_sounds": ["针对的音素"],
+            "technique": "具体技巧",
+            "practice_method": "练习方法"
+        }
+    ],
+    "rhythm_pattern": {
+        "beat_count": "节拍数",
+        "stress_pattern": "重音模式",
+        "pause_points": ["建议停顿位置"],
+        "speed_suggestion": "建议语速"
+    },
+    "practice_sequence": [
+        {
+            "step": 1,
+            "focus": "练习重点",
+            "content": "练习内容",
+            "repetitions": "建议重复次数"
+        }
+    ],
+    "annotated_text": "带音素标注的文本（用[]标注核心音素）"
+}
+```
+
+分析要求：
+1. 准确识别绕口令中的核心音素和难点
+2. 详细解释声学特征的关键差异
+3. 找出容易混淆的音素对
+4. 提供实用的发音技巧和练习方法
+5. 设计合理的练习顺序
+
+注意：
+- 必须严格按照JSON格式输出
+- 分析要基于语音学原理
+- 建议要具体可操作"""
+        else:
+            system_prompt = """You are an expert in phonetics and pronunciation teaching. Your task is to analyze tongue twister pronunciation key points to help users practice pronunciation.
+
+You must output the analysis result in the following JSON format:
+
+```json
+{
+    "title": "Tongue twister title/theme",
+    "difficulty": "Difficulty level (Easy/Medium/Hard/Expert)",
+    "core_phonemes": [
+        {
+            "phoneme": "Phoneme (e.g., /p/, /b/, /θ/, /ð/)",
+            "ipa": "IPA symbol",
+            "description": "Pronunciation description",
+            "articulation": {
+                "manner": "Manner of articulation (e.g., plosive, fricative, nasal)",
+                "place": "Place of articulation (e.g., bilabial, alveolar, velar)",
+                "voicing": "Voiced/Voiceless"
+            },
+            "examples": ["Example words containing this phoneme"]
+        }
+    ],
+    "acoustic_features": [
+        {
+            "feature": "Acoustic feature name",
+            "description": "Feature description",
+            "key_difference": "Key difference from similar sounds",
+            "measurement": "Measurable acoustic indicators (e.g., VOT, F1/F2 frequency)"
+        }
+    ],
+    "confusion_pairs": [
+        {
+            "pair": ["phoneme1", "phoneme2"],
+            "difference": "Key distinction",
+            "common_errors": "Common mistakes",
+            "practice_tip": "Practice suggestion"
+        }
+    ],
+    "pronunciation_tips": [
+        {
+            "tip": "Pronunciation tip",
+            "target_sounds": ["Target phonemes"],
+            "technique": "Specific technique",
+            "practice_method": "Practice method"
+        }
+    ],
+    "rhythm_pattern": {
+        "beat_count": "Number of beats",
+        "stress_pattern": "Stress pattern",
+        "pause_points": ["Suggested pause positions"],
+        "speed_suggestion": "Suggested speed"
+    },
+    "practice_sequence": [
+        {
+            "step": 1,
+            "focus": "Practice focus",
+            "content": "Practice content",
+            "repetitions": "Suggested repetitions"
+        }
+    ],
+    "annotated_text": "Text with phoneme annotations (mark core phonemes with [])"
+}
+```
+
+Requirements:
+1. Accurately identify core phonemes and difficulty points
+2. Explain acoustic feature differences in detail
+3. Identify easily confused phoneme pairs
+4. Provide practical pronunciation tips and practice methods
+5. Design a reasonable practice sequence"""
+
+        user_prompt = f"""请分析以下绕口令的发音要点：
+
+## 绕口令内容
+
+{text}
+
+请严格按照JSON格式输出分析结果，重点分析核心音素、声学特征差异和发音技巧。"""
+
+        messages = [
+            {"Role": "system", "Content": system_prompt},
+            {"Role": "user", "Content": user_prompt}
+        ]
+
+        result = await self.chat(messages, temperature=0.3)
+        return result["content"]
+
+
 # Singleton instance
 hunyuan_service = HunyuanService()

@@ -187,3 +187,40 @@ class ReportResponse(BaseModel):
     speech_rate: Optional[float] = Field(None, description="语速（字/分钟或词/分钟）")
     evaluation_report: Optional[str] = Field(None, description="AI生成的Markdown格式评测报告")
     error: Optional[str] = Field(None, description="错误信息")
+
+
+class TextAnalysisRequest(BaseModel):
+    """Request model for text structure analysis."""
+
+    text: str = Field(..., description="待分析的文本内容", min_length=10, max_length=50000)
+    custom_prompt: Optional[str] = Field(None, description="自定义分析要求")
+    message_id: Optional[str] = Field(None, description="消息ID，不传则自动生成UUID")
+
+
+class TextAnalysisResponse(BaseModel):
+    """Response model for text structure analysis."""
+
+    success: bool = Field(..., description="是否成功")
+    message: str = Field(..., description="状态消息")
+    message_id: str = Field(..., description="消息ID")
+    analysis_result: Optional[str] = Field(None, description="分析结果（JSON格式字符串）")
+    error: Optional[str] = Field(None, description="错误信息")
+
+
+class TongueTwisterRequest(BaseModel):
+    """Request model for tongue twister pronunciation analysis."""
+
+    text: str = Field(..., description="绕口令文本", min_length=2, max_length=5000)
+    language: str = Field(default="zh", description="语言：'zh'中文，'en'英文")
+    message_id: Optional[str] = Field(None, description="消息ID，不传则自动生成UUID")
+
+
+class TongueTwisterResponse(BaseModel):
+    """Response model for tongue twister pronunciation analysis."""
+
+    success: bool = Field(..., description="是否成功")
+    message: str = Field(..., description="状态消息")
+    message_id: str = Field(..., description="消息ID")
+    tongue_twister: str = Field(..., description="绕口令原文")
+    analysis_result: Optional[str] = Field(None, description="发音分析结果（JSON格式字符串）")
+    error: Optional[str] = Field(None, description="错误信息")

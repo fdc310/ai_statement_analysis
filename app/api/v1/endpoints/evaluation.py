@@ -28,7 +28,11 @@ from app.schemas.evaluation import (
     SignatureRequest,
     SignatureResponse,
     ReportRequest,
-    ReportResponse
+    ReportResponse,
+    TextAnalysisRequest,
+    TextAnalysisResponse,
+    TongueTwisterRequest,
+    TongueTwisterResponse
 )
 from app.services.tencent import asr_service, soe_service, hunyuan_service
 
@@ -760,5 +764,218 @@ async def generate_report_upload(
             message="Report generation failed",
             message_id=msg_id,
             audio_url="",
+            error=str(e)
+        )
+
+
+@router.post("/text-analysis", response_model=TextAnalysisResponse)
+async def analyze_text_structure(
+    request: TextAnalysisRequest,
+    x_signature: Optional[str] = Header(None, alias="X-Signature")
+) -> TextAnalysisResponse:
+    """
+    Analyze text structure: core ideas, logical structure, key points.
+
+    This endpoint analyzes the provided text and extracts:
+    - Core idea / main theme
+    - Key points with importance levels
+    - Logical structure (type and outline)
+    - Arguments (claims, evidence, reasoning)
+    - Conclusion
+    - Writing style
+    - Improvement suggestions
+
+    **Headers**:
+    - X-Signature: AES encrypted signature (required)
+
+    **Request body**:
+    ```json
+    {
+        "text": "待分析的文本内容...",
+        "custom_prompt": "可选的自定义分析要求",
+        "message_id": "可选的消息ID"
+    }
+    ```
+
+    **Response**:
+    ```json
+    {
+        "success": true,
+        "message": "Analysis completed successfully",
+        "message_id": "uuid",
+        "analysis_result": "{...JSON格式的分析结果...}"
+    }
+    ```
+
+    **Analysis Result Structure**:
+    ```json
+    {
+        "core_idea": "核心思想",
+        "key_points": [
+            {"title": "要点标题", "content": "内容", "importance": "高/中/低"}
+        ],
+        "logical_structure": {
+            "type": "结构类型",
+            "description": "结构说明",
+            "outline": [...]
+        },
+        "arguments": [
+            {"claim": "论点", "evidence": "论据", "reasoning": "论证"}
+        ],
+        "conclusion": "结论",
+        "writing_style": "写作风格",
+        "suggestions": ["建议1", "建议2"]
+    }
+    ```
+    """
+    verify_signature(x_signature)
+
+    msg_id = request.message_id or str(uuid.uuid4())
+
+    try:
+        analysis_result = await hunyuan_service.analyze_text_structure(
+            text=request.text,
+            custom_prompt=request.custom_prompt
+        )
+
+        return TextAnalysisResponse(
+            success=True,
+            message="Analysis completed successfully",
+            message_id=msg_id,
+            analysis_result=analysis_result
+        )
+
+    except Exception as e:
+        return TextAnalysisResponse(
+            success=False,
+            message="Analysis failed",
+            message_id=msg_id,
+            error=str(e)
+        )
+
+
+@router.post("/tongue-twister", response_model=TongueTwisterResponse)
+async def analyze_tongue_twister(
+    request: TongueTwisterRequest,
+    x_signature: Optional[str] = Header(None, alias="X-Signature")
+) -> TongueTwisterResponse:
+    """
+    Analyze tongue twister pronunciation key points.
+
+    This endpoint analyzes tongue twisters and provides:
+    - Core phonemes and their articulation details
+    - Acoustic feature differences between similar sounds
+    - Confusion pairs and how to distinguish them
+    - Pronunciation tips and techniques
+    - Practice sequence recommendations
+
+    **Headers**:
+    - X-Signature: AES encrypted signature (required)
+
+    **Request body**:
+    ```json
+    {
+        "text": "八百标兵奔北坡，炮兵并排北边跑",
+        "language": "zh",
+        "message_id": "可选的消息ID"
+    }
+    ```
+
+    **Response**:
+    ```json
+    {
+        "success": true,
+        "message": "Analysis completed successfully",
+        "message_id": "uuid",
+        "tongue_twister": "原文",
+        "analysis_result": "{...JSON格式的分析结果...}"
+    }
+    ```
+
+    **Analysis Result Structure (Chinese)**:
+    ```json
+    {
+        "title": "绕口令标题",
+        "difficulty": "难度等级",
+        "core_phonemes": [
+            {
+                "phoneme": "音素",
+                "pinyin": "拼音",
+                "ipa": "国际音标",
+                "description": "发音描述",
+                "articulation": {
+                    "manner": "发音方式",
+                    "place": "发音部位",
+                    "voicing": "清浊"
+                },
+                "examples": ["示例字词"]
+            }
+        ],
+        "acoustic_features": [
+            {
+                "feature": "声学特征",
+                "description": "特征描述",
+                "key_difference": "关键差异",
+                "measurement": "声学指标"
+            }
+        ],
+        "confusion_pairs": [
+            {
+                "pair": ["音素1", "音素2"],
+                "difference": "区分要点",
+                "common_errors": "常见错误",
+                "practice_tip": "练习建议"
+            }
+        ],
+        "pronunciation_tips": [
+            {
+                "tip": "发音提示",
+                "target_sounds": ["目标音素"],
+                "technique": "技巧",
+                "practice_method": "练习方法"
+            }
+        ],
+        "rhythm_pattern": {
+            "beat_count": "节拍数",
+            "stress_pattern": "重音模式",
+            "pause_points": ["停顿位置"],
+            "speed_suggestion": "建议语速"
+        },
+        "practice_sequence": [
+            {
+                "step": 1,
+                "focus": "练习重点",
+                "content": "练习内容",
+                "repetitions": "重复次数"
+            }
+        ],
+        "annotated_text": "带[音素标注]的文本"
+    }
+    ```
+    """
+    verify_signature(x_signature)
+
+    msg_id = request.message_id or str(uuid.uuid4())
+
+    try:
+        analysis_result = await hunyuan_service.analyze_tongue_twister(
+            text=request.text,
+            language=request.language
+        )
+
+        return TongueTwisterResponse(
+            success=True,
+            message="Analysis completed successfully",
+            message_id=msg_id,
+            tongue_twister=request.text,
+            analysis_result=analysis_result
+        )
+
+    except Exception as e:
+        return TongueTwisterResponse(
+            success=False,
+            message="Analysis failed",
+            message_id=msg_id,
+            tongue_twister=request.text,
             error=str(e)
         )
