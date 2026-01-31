@@ -28,7 +28,8 @@ from app.schemas.evaluation import (
     SignatureRequest,
     SignatureResponse,
     ReportRequest,
-    ReportResponse
+    ReportResponse,
+    ReportType
 )
 from app.services.tencent import asr_service, soe_service, hunyuan_service
 
@@ -455,19 +456,19 @@ async def generate_report(
     x_signature: Optional[str] = Header(None, alias="X-Signature")
 ) -> ReportResponse:
     """
-    Generate AI evaluation report from pre-existing SOE scores (synchronous).
+    根据SOE评测结果生成AI评测报告（同步接口）。
 
-    This endpoint receives SOE evaluation results and generates an AI report directly.
-    If speech_text is not provided, ASR will be called to transcribe the audio.
+    接收SOE评测结果数据，直接生成AI报告。如果未提供speech_text，将自动调用ASR进行转写。
 
-    **Features**:
-    - Receives full SOE result data
-    - Optional ASR transcription (if speech_text not provided)
-    - Topic relevance analysis (if topic provided)
-    - Speech rate calculation (if audio_duration provided)
+    **功能特性**:
+    - 接收完整的SOE评测结果数据
+    - 可选ASR转写（如果未提供speech_text）
+    - 主题贴题性分析（如果提供了topic）
+    - 语速计算（如果提供了audio_duration）
+    - 支持简洁报告和完整报告两种类型
 
     **Headers**:
-    - X-Signature: AES encrypted signature (required)
+    - X-Signature: AES加密签名（必填）
 
     **Request body**:
     ```json
@@ -477,19 +478,34 @@ async def generate_report(
         "soe_result": {
             "SuggestedScore": 85.5,
             "PronAccuracy": 90.2,
-            "PronFluency": 88.0,
-            "PronCompletion": 95.0,
-            "Words": [...]
+            "PronFluency": 0.88,
+            "PronCompletion": -1,
+            "Words": [
+                {"Word": "你", "PronAccuracy": 95.5, "PronFluency": 0.92},
+                {"Word": "好", "PronAccuracy": 88.2, "PronFluency": 0.85}
+            ]
         },
         "audio_duration": 60.5,
         "topic": "环境保护",
-        "custom_prompt": "optional custom evaluation prompt",
-        "message_id": "optional-custom-id",
-        "language": "zh"
+        "custom_prompt": "可选，自定义评测提示词",
+        "message_id": "可选，消息ID",
+        "language": "zh",
+        "report_type": "full"
     }
     ```
 
-    **Response**:
+    **参数说明**:
+    - `audio_url`: 音频文件URL（必填）
+    - `speech_text`: 语音转写文本，不传则自动调用ASR识别
+    - `soe_result`: SOE评测返回的result数据（必填），包含SuggestedScore、PronAccuracy、Words等字段
+    - `audio_duration`: 音频时长（秒），用于计算语速
+    - `topic`: 演讲主题，用于分析内容贴题性。不传则为自由说模式
+    - `custom_prompt`: 自定义AI评测提示词
+    - `message_id`: 消息ID，不传则自动生成UUID
+    - `language`: 语言，'zh'中文，'en'英文，默认'zh'
+    - `report_type`: 报告类型，'simple'简洁报告，'full'完整报告，默认'full'
+
+    **Response - 简洁报告 (report_type="simple")**:
     ```json
     {
         "success": true,
@@ -498,7 +514,91 @@ async def generate_report(
         "audio_url": "https://example.com/audio.mp3",
         "speech_text": "转写文本",
         "speech_rate": 180.5,
-        "evaluation_report": "# AI Evaluation Report\\n..."
+        "evaluation_report": {
+            "speech_rate": {
+                "rate": 180.5,
+                "score": 85,
+                "level": "良好",
+                "suggestion": "语速适中，建议保持..."
+            },
+            "weak_paragraphs": [
+                {
+                    "paragraph_index": 1,
+                    "content": "段落内容...",
+                    "low_score_words": [
+                        {"word": "好", "accuracy": 88.2}
+                    ],
+                    "suggestion": "建议加强..."
+                }
+            ],
+            "overall_suggestion": "整体建议..."
+        }
+    }
+    ```
+
+    **Response - 完整报告 (report_type="full")**:
+    ```json
+    {
+        "success": true,
+        "message": "Report generated successfully",
+        "message_id": "uuid",
+        "audio_url": "https://example.com/audio.mp3",
+        "speech_text": "转写文本",
+        "speech_rate": 180.5,
+        "evaluation_report": {
+            "logic_completeness": {
+                "overall_score": 85,
+                "logic_score": 82,
+                "fluency_score": 88,
+                "speech_rate_score": 85,
+                "topic_relevance_score": 90,
+                "speech_rate_value": 180.5,
+                "speech_rate_level": "良好",
+                "speech_rate_suggestion": "语速建议..."
+            },
+            "structure_visualization": {
+                "arguments": ["论点1", "论点2", "论点3"],
+                "conclusion": "结论要点..."
+            },
+            "speech_rate_evaluation": {
+                "score": 85,
+                "rate_value": 180.5,
+                "level": "良好",
+                "analysis": "语速分析...",
+                "suggestion": "语速建议..."
+            },
+            "content_perspective": {
+                "score": 88,
+                "topic_relevance": "贴题性分析...",
+                "depth": "内容深度分析...",
+                "coverage": "内容覆盖面分析...",
+                "suggestion": "内容改进建议..."
+            },
+            "logic_structure": {
+                "score": 82,
+                "organization": "整体结构分析...",
+                "coherence": "连贯性分析...",
+                "reasoning": "论证逻辑分析...",
+                "suggestion": "逻辑结构改进建议..."
+            },
+            "expression_wording": {
+                "score": 86,
+                "vocabulary_level": "用词水平分析...",
+                "expression_style": "表达风格分析...",
+                "highlights": ["表达亮点1", "表达亮点2"],
+                "suggestion": "表达用词改进建议..."
+            },
+            "strengths": ["优点1", "优点2", "优点3"],
+            "improvements": ["改进意见1", "改进意见2"],
+            "weak_paragraphs": [
+                {
+                    "paragraph_index": 1,
+                    "content": "段落内容...",
+                    "low_score_words": [{"word": "好", "accuracy": 88.2}],
+                    "suggestion": "建议加强..."
+                }
+            ]
+        }
     }
     ```
     """
@@ -565,17 +665,29 @@ async def generate_report(
             "low_score_count": len(low_score_words_data)
         }
 
-        # Generate AI evaluation report with extended features
-        evaluation_report = await hunyuan_service.generate_evaluation_extended(
-            speech_text=speech_text,
-            speech_scores=scores_data,
-            custom_prompt=request.custom_prompt,
-            low_score_words=low_score_words_data,
-            statistics=statistics_data,
-            topic=request.topic,
-            speech_rate=speech_rate,
-            audio_duration=request.audio_duration
-        )
+        # 根据 report_type 生成不同格式的报告
+        if request.report_type == ReportType.simple:
+            # 简洁报告：语速评分 + 低分段落分析
+            evaluation_report = await hunyuan_service.generate_simple_report_json(
+                speech_text=speech_text,
+                speech_scores=scores_data,
+                low_score_words=low_score_words_data,
+                speech_rate=speech_rate,
+                audio_duration=request.audio_duration,
+                language=request.language
+            )
+        else:
+            # 完整报告：语速 + 内容角度 + 逻辑与结构 + 表达与用词
+            evaluation_report = await hunyuan_service.generate_full_report_json(
+                speech_text=speech_text,
+                speech_scores=scores_data,
+                low_score_words=low_score_words_data,
+                statistics=statistics_data,
+                topic=request.topic,
+                speech_rate=speech_rate,
+                audio_duration=request.audio_duration,
+                language=request.language
+            )
 
         return ReportResponse(
             success=True,
@@ -607,36 +719,39 @@ async def generate_report_upload(
     custom_prompt: Optional[str] = Form(None, description="自定义AI评测提示词"),
     message_id: Optional[str] = Form(None, description="消息ID，不传则自动生成UUID"),
     language: str = Form("zh", description="语言：'zh'中文，'en'英文"),
+    report_type: str = Form("full", description="报告类型：'simple'简洁报告，'full'完整报告"),
     x_signature: Optional[str] = Header(None, alias="X-Signature")
 ) -> ReportResponse:
     """
-    Upload audio file and generate AI evaluation report from SOE scores (synchronous).
+    上传音频文件并根据SOE评测结果生成AI评测报告（同步接口）。
 
-    This endpoint receives an uploaded audio file and SOE evaluation results,
-    then generates an AI report directly. If speech_text is not provided,
-    ASR will be called to transcribe the audio.
+    接收上传的音频文件和SOE评测结果，直接生成AI报告。如果未提供speech_text，将自动调用ASR进行转写。
 
-    **Features**:
-    - Upload audio file directly
-    - Receives SOE result data as JSON string
-    - Optional ASR transcription (if speech_text not provided)
-    - Topic relevance analysis (if topic provided)
-    - Speech rate calculation (if audio_duration provided)
+    **功能特性**:
+    - 直接上传音频文件
+    - 接收SOE评测结果数据（JSON字符串格式）
+    - 可选ASR转写（如果未提供speech_text）
+    - 主题贴题性分析（如果提供了topic）
+    - 语速计算（如果提供了audio_duration）
+    - 支持简洁报告和完整报告两种类型
 
     **Headers**:
-    - X-Signature: AES encrypted signature (required)
+    - X-Signature: AES加密签名（必填）
 
     **Form data**:
-    - file: 音频文件
-    - soe_result: SOE评测结果(JSON字符串)，如 {"SuggestedScore": 85.5, "PronAccuracy": 90.2, ...}
-    - speech_text: 可选，语音转写文本
-    - audio_duration: 可选，音频时长（秒）
-    - topic: 可选，演讲主题
-    - custom_prompt: 可选，自定义评测提示词
-    - message_id: 可选，消息ID
-    - language: 语言，默认 "zh"
+    | 参数名 | 类型 | 必填 | 说明 |
+    |--------|------|------|------|
+    | file | File | 是 | 音频文件（支持ffmpeg支持的所有格式） |
+    | soe_result | string | 是 | SOE评测结果JSON字符串，如 `{"SuggestedScore": 85.5, "PronAccuracy": 90.2, "Words": [...]}` |
+    | speech_text | string | 否 | 语音转写文本，不传则自动调用ASR识别 |
+    | audio_duration | float | 否 | 音频时长（秒），用于计算语速 |
+    | topic | string | 否 | 演讲主题，用于分析内容贴题性。不传则为自由说模式 |
+    | custom_prompt | string | 否 | 自定义AI评测提示词 |
+    | message_id | string | 否 | 消息ID，不传则自动生成UUID |
+    | language | string | 否 | 语言，'zh'中文，'en'英文，默认'zh' |
+    | report_type | string | 否 | 报告类型，'simple'简洁报告，'full'完整报告，默认'full' |
 
-    **Response**:
+    **Response - 简洁报告 (report_type="simple")**:
     ```json
     {
         "success": true,
@@ -645,7 +760,89 @@ async def generate_report_upload(
         "audio_url": "",
         "speech_text": "转写文本",
         "speech_rate": 180.5,
-        "evaluation_report": "# AI Evaluation Report\\n..."
+        "evaluation_report": {
+            "speech_rate": {
+                "rate": 180.5,
+                "score": 85,
+                "level": "良好",
+                "suggestion": "语速适中，建议保持..."
+            },
+            "weak_paragraphs": [
+                {
+                    "paragraph_index": 1,
+                    "content": "段落内容...",
+                    "low_score_words": [{"word": "好", "accuracy": 88.2}],
+                    "suggestion": "建议加强..."
+                }
+            ],
+            "overall_suggestion": "整体建议..."
+        }
+    }
+    ```
+
+    **Response - 完整报告 (report_type="full")**:
+    ```json
+    {
+        "success": true,
+        "message": "Report generated successfully",
+        "message_id": "uuid",
+        "audio_url": "",
+        "speech_text": "转写文本",
+        "speech_rate": 180.5,
+        "evaluation_report": {
+            "logic_completeness": {
+                "overall_score": 85,
+                "logic_score": 82,
+                "fluency_score": 88,
+                "speech_rate_score": 85,
+                "topic_relevance_score": 90,
+                "speech_rate_value": 180.5,
+                "speech_rate_level": "良好",
+                "speech_rate_suggestion": "语速建议..."
+            },
+            "structure_visualization": {
+                "arguments": ["论点1", "论点2", "论点3"],
+                "conclusion": "结论要点..."
+            },
+            "speech_rate_evaluation": {
+                "score": 85,
+                "rate_value": 180.5,
+                "level": "良好",
+                "analysis": "语速分析...",
+                "suggestion": "语速建议..."
+            },
+            "content_perspective": {
+                "score": 88,
+                "topic_relevance": "贴题性分析...",
+                "depth": "内容深度分析...",
+                "coverage": "内容覆盖面分析...",
+                "suggestion": "内容改进建议..."
+            },
+            "logic_structure": {
+                "score": 82,
+                "organization": "整体结构分析...",
+                "coherence": "连贯性分析...",
+                "reasoning": "论证逻辑分析...",
+                "suggestion": "逻辑结构改进建议..."
+            },
+            "expression_wording": {
+                "score": 86,
+                "vocabulary_level": "用词水平分析...",
+                "expression_style": "表达风格分析...",
+                "highlights": ["表达亮点1", "表达亮点2"],
+                "suggestion": "表达用词改进建议..."
+            },
+            "strengths": ["优点1", "优点2", "优点3"],
+            "improvements": ["改进意见1", "改进意见2"],
+            "weak_paragraphs": [
+                {
+                    "paragraph_index": 1,
+                    "content": "段落内容...",
+                    "low_score_words": [{"word": "好", "accuracy": 88.2}],
+                    "suggestion": "建议加强..."
+                }
+            ]
+        }
     }
     ```
     """
@@ -732,17 +929,29 @@ async def generate_report_upload(
             "low_score_count": len(low_score_words_data)
         }
 
-        # Generate AI evaluation report with extended features
-        evaluation_report = await hunyuan_service.generate_evaluation_extended(
-            speech_text=text,
-            speech_scores=scores_data,
-            custom_prompt=custom_prompt,
-            low_score_words=low_score_words_data,
-            statistics=statistics_data,
-            topic=topic,
-            speech_rate=speech_rate,
-            audio_duration=audio_duration
-        )
+        # 根据 report_type 生成不同格式的报告
+        if report_type == "simple":
+            # 简洁报告：语速评分 + 低分段落分析
+            evaluation_report = await hunyuan_service.generate_simple_report_json(
+                speech_text=text,
+                speech_scores=scores_data,
+                low_score_words=low_score_words_data,
+                speech_rate=speech_rate,
+                audio_duration=audio_duration,
+                language=language
+            )
+        else:
+            # 完整报告：语速 + 内容角度 + 逻辑与结构 + 表达与用词
+            evaluation_report = await hunyuan_service.generate_full_report_json(
+                speech_text=text,
+                speech_scores=scores_data,
+                low_score_words=low_score_words_data,
+                statistics=statistics_data,
+                topic=topic,
+                speech_rate=speech_rate,
+                audio_duration=audio_duration,
+                language=language
+            )
 
         return ReportResponse(
             success=True,
