@@ -452,6 +452,383 @@ class HunyuanService(TencentCloudClient):
 
         return prompt
 
+    async def generate_simple_report_json(
+        self,
+        speech_text: str,
+        speech_scores: dict,
+        low_score_words: Optional[list] = None,
+        speech_rate: Optional[float] = None,
+        audio_duration: Optional[float] = None,
+        language: str = "zh"
+    ) -> dict:
+        """
+        生成简洁报告（JSON格式）
+        包含：语速评分、语速评价、低分段落分析
+        """
+        system_prompt = self._build_simple_report_system_prompt(language)
+        user_prompt = self._build_simple_report_user_prompt(
+            speech_text, speech_scores, low_score_words,
+            speech_rate, audio_duration, language
+        )
+
+        messages = [
+            {"Role": "system", "Content": system_prompt},
+            {"Role": "user", "Content": user_prompt}
+        ]
+
+        result = await self.chat(messages, temperature=0.3)
+        content = result["content"]
+
+        # 解析 JSON
+        try:
+            # 尝试从响应中提取 JSON
+            import re
+            json_match = re.search(r'\{[\s\S]*\}', content)
+            if json_match:
+                return json.loads(json_match.group())
+            return json.loads(content)
+        except json.JSONDecodeError:
+            # 如果解析失败，返回默认结构
+            return {
+                "speech_rate": {
+                    "rate": speech_rate or 0,
+                    "score": 0,
+                    "level": "未知",
+                    "suggestion": "无法解析AI响应"
+                },
+                "weak_paragraphs": [],
+                "overall_suggestion": content
+            }
+
+    def _build_simple_report_system_prompt(self, language: str) -> str:
+        """构建简洁报告的系统提示词"""
+        rate_unit = "字/分钟" if language == "zh" else "词/分钟"
+        return f"""你是一个专业的语音演讲评测专家。你的任务是生成一份简洁的评测报告。
+
+你必须严格按照以下JSON格式输出，不要添加任何额外内容，只输出JSON：
+
+{{
+    "speech_rate": {{
+        "rate": <语速数值>,
+        "score": <语速评分0-100>,
+        "level": "<优秀/良好/一般/较差>",
+        "suggestion": "<语速建议，简短一句话>"
+    }},
+    "weak_paragraphs": [
+        {{
+            "paragraph_index": <段落索引从1开始>,
+            "content": "<段落内容摘要，不超过50字>",
+            "low_score_words": [
+                {{"word": "<字词>", "accuracy": <准确度分数>}}
+            ],
+            "suggestion": "<针对该段落的改进建议>"
+        }}
+    ],
+    "overall_suggestion": "<整体简短建议，不超过100字>"
+}}
+
+语速评分标准（{rate_unit}）：
+- 中文：120-180优秀(90-100分)，100-120或180-200良好(70-89分)，80-100或200-220一般(50-69分)，其他较差(0-49分)
+- 英文：100-150优秀(90-100分)，80-100或150-180良好(70-89分)，60-80或180-200一般(50-69分)，其他较差(0-49分)
+
+注意：
+- 只输出纯JSON，不要添加markdown代码块标记
+- weak_paragraphs只包含有低分字词的段落，最多3个
+- 如果没有低分字词，weak_paragraphs为空数组"""
+
+    def _build_simple_report_user_prompt(
+        self,
+        speech_text: str,
+        speech_scores: dict,
+        low_score_words: Optional[list] = None,
+        speech_rate: Optional[float] = None,
+        audio_duration: Optional[float] = None,
+        language: str = "zh"
+    ) -> str:
+        """构建简洁报告的用户提示词"""
+        rate_unit = "字/分钟" if language == "zh" else "词/分钟"
+        prompt = f"""请分析以下语音内容并生成简洁报告：
+
+## 语音转文字内容
+
+{speech_text}
+
+## 语速信息
+
+- 语速: {speech_rate or 0} {rate_unit}
+- 音频时长: {audio_duration or 0:.1f} 秒
+"""
+
+        if low_score_words and len(low_score_words) > 0:
+            prompt += """
+## 低分字词列表
+
+"""
+            for word in low_score_words[:20]:
+                prompt += f"- {word.get('word', '')}: 准确度{word.get('accuracy', 0)}分\n"
+
+        prompt += """
+请根据低分字词的位置，判断哪些段落读的不太好，并给出改进建议。
+严格按照系统提示的JSON格式输出。"""
+
+        return prompt
+
+    async def generate_full_report_json(
+        self,
+        speech_text: str,
+        speech_scores: dict,
+        low_score_words: Optional[list] = None,
+        statistics: Optional[dict] = None,
+        topic: Optional[str] = None,
+        speech_rate: Optional[float] = None,
+        audio_duration: Optional[float] = None,
+        language: str = "zh"
+    ) -> dict:
+        """
+        生成完整报告（JSON格式）
+        包含：语速、内容角度、逻辑与结构、表达与用词
+        """
+        system_prompt = self._build_full_report_system_prompt(language, topic is not None)
+        user_prompt = self._build_full_report_user_prompt(
+            speech_text, speech_scores, low_score_words, statistics,
+            topic, speech_rate, audio_duration, language
+        )
+
+        messages = [
+            {"Role": "system", "Content": system_prompt},
+            {"Role": "user", "Content": user_prompt}
+        ]
+
+        result = await self.chat(messages, temperature=0.3)
+        content = result["content"]
+
+        # 解析 JSON
+        try:
+            import re
+            json_match = re.search(r'\{[\s\S]*\}', content)
+            if json_match:
+                return json.loads(json_match.group())
+            return json.loads(content)
+        except json.JSONDecodeError:
+            # 如果解析失败，返回默认结构
+            return {
+                "logic_completeness": {
+                    "overall_score": 0,
+                    "logic_score": 0,
+                    "fluency_score": 0,
+                    "speech_rate_score": 0,
+                    "speech_rate_value": speech_rate or 0,
+                    "speech_rate_level": "未知",
+                    "speech_rate_suggestion": "无法解析AI响应"
+                },
+                "structure_visualization": {
+                    "arguments": [],
+                    "conclusion": ""
+                },
+                "speech_rate_evaluation": {
+                    "score": 0,
+                    "rate_value": speech_rate or 0,
+                    "level": "未知",
+                    "analysis": "无法解析AI响应",
+                    "suggestion": ""
+                },
+                "content_perspective": {
+                    "score": 0,
+                    "topic_relevance": "",
+                    "depth": "",
+                    "coverage": "",
+                    "suggestion": "无法解析AI响应"
+                },
+                "logic_structure": {
+                    "score": 0,
+                    "organization": "",
+                    "coherence": "",
+                    "reasoning": "",
+                    "suggestion": "无法解析AI响应"
+                },
+                "expression_wording": {
+                    "score": 0,
+                    "vocabulary_level": "",
+                    "expression_style": "",
+                    "highlights": [],
+                    "suggestion": "无法解析AI响应"
+                },
+                "strengths": [],
+                "improvements": [content],
+                "weak_paragraphs": []
+            }
+
+    def _build_full_report_system_prompt(self, language: str, has_topic: bool) -> str:
+        """构建完整报告的系统提示词"""
+        rate_unit = "字/分钟" if language == "zh" else "词/分钟"
+
+        topic_field = ""
+        if has_topic:
+            topic_field = '"topic_relevance_score": <贴题性评分0-100>,'
+
+        return f"""你是一个专业的语音演讲评测专家。你的任务是生成一份完整的评测报告。
+
+你必须严格按照以下JSON格式输出，不要添加任何额外内容，只输出JSON：
+
+{{
+    "logic_completeness": {{
+        "overall_score": <综合评分0-100>,
+        "logic_score": <逻辑性评分0-100>,
+        "fluency_score": <流畅度评分0-100>,
+        "speech_rate_score": <语速评分0-100>,
+        {topic_field}
+        "speech_rate_value": <语速数值>,
+        "speech_rate_level": "<优秀/良好/一般/较差>",
+        "speech_rate_suggestion": "<语速建议>"
+    }},
+    "structure_visualization": {{
+        "arguments": ["<论点1>", "<论点2>", "<论点3>"],
+        "conclusion": "<结论要点>"
+    }},
+    "speech_rate_evaluation": {{
+        "score": <语速评分0-100>,
+        "rate_value": <语速数值>,
+        "level": "<优秀/良好/一般/较差>",
+        "analysis": "<语速分析，描述语速快慢对表达的影响>",
+        "suggestion": "<语速改进建议>"
+    }},
+    "content_perspective": {{
+        "score": <内容角度评分0-100>,
+        "topic_relevance": "<贴题性分析，如无主题则分析内容主旨>",
+        "depth": "<内容深度分析>",
+        "coverage": "<内容覆盖面分析>",
+        "suggestion": "<内容改进建议>"
+    }},
+    "logic_structure": {{
+        "score": <逻辑结构评分0-100>,
+        "organization": "<整体结构分析>",
+        "coherence": "<连贯性分析>",
+        "reasoning": "<论证逻辑分析>",
+        "suggestion": "<逻辑结构改进建议>"
+    }},
+    "expression_wording": {{
+        "score": <表达用词评分0-100>,
+        "vocabulary_level": "<用词水平分析>",
+        "expression_style": "<表达风格分析>",
+        "highlights": ["<表达亮点1>", "<表达亮点2>"],
+        "suggestion": "<表达用词改进建议>"
+    }},
+    "main_issues": [
+        {{
+            "issue_type": "<问题类型>",
+            "description": "<问题具体描述>",
+            "impact_level": "<高/中/低>",
+            "example": "<具体例子>",
+            "suggested_fix": "<具体改进建议>"
+        }}
+    ],
+    "strengths": ["<优点1>", "<优点2>", "<优点3>"],
+    "improvements": ["<改进意见1>", "<改进意见2>", "<改进意见3>"],
+    "weak_paragraphs": [
+        {{
+            "paragraph_index": <段落索引从1开始>,
+            "content": "<段落内容摘要>",
+            "low_score_words": [
+                {{"word": "<字词>", "accuracy": <准确度分数>}}
+            ],
+            "suggestion": "<改进建议>"
+        }}
+    ]
+}}
+
+语速评分标准（{rate_unit}）：
+- 中文：120-180优秀(90-100分)，100-120或180-200良好(70-89分)，80-100或200-220一般(50-69分)，其他较差(0-49分)
+- 英文：100-150优秀(90-100分)，80-100或150-180良好(70-89分)，60-80或180-200一般(50-69分)，其他较差(0-49分)
+
+评分规则：
+1. 逻辑完整性评分：综合评分是各项的加权平均
+2. 语速评价：根据语速数值评分，分析语速对表达效果的影响
+3. 内容角度：分析内容的贴题性、深度和覆盖面
+4. 逻辑与结构：分析演讲的组织结构、连贯性和论证逻辑
+5. 表达与用词：分析用词水平、表达风格和亮点
+6. 优点：要详细描述演讲的亮点，每条优点不少于20字，要具体说明体现在哪里
+
+注意：
+- 只输出纯JSON，不要添加markdown代码块标记
+- 所有评分都是0-100分
+- weak_paragraphs只包含有低分字词的段落
+- 论点和结论要从演讲内容中提取
+- 各维度的分析要具体、有针对性
+- strengths优点部分要写得详细具体，每条不少于15字，突出演讲者的闪光点"""
+
+    def _build_full_report_user_prompt(
+        self,
+        speech_text: str,
+        speech_scores: dict,
+        low_score_words: Optional[list] = None,
+        statistics: Optional[dict] = None,
+        topic: Optional[str] = None,
+        speech_rate: Optional[float] = None,
+        audio_duration: Optional[float] = None,
+        language: str = "zh"
+    ) -> str:
+        """构建完整报告的用户提示词"""
+        rate_unit = "字/分钟" if language == "zh" else "词/分钟"
+        prompt = f"""请分析以下语音内容并生成完整报告：
+
+## 语音转文字内容
+
+{speech_text}
+
+## 语音评分数据
+
+- 发音准确度: {speech_scores.get('pronunciation_accuracy', 0)}分
+- 发音流利度: {speech_scores.get('pronunciation_fluency', 0)}分
+- 发音完整度: {speech_scores.get('pronunciation_completion', 0)}分
+- 综合建议分: {speech_scores.get('suggested_score', 0)}分
+
+## 语速信息
+
+- 语速: {speech_rate or 0} {rate_unit}
+- 音频时长: {audio_duration or 0:.1f} 秒
+"""
+
+        if topic:
+            prompt += f"""
+## 演讲主题
+
+主题：{topic}
+请分析演讲内容与该主题的贴题性。
+"""
+
+        if statistics:
+            prompt += f"""
+## 评分统计
+
+- 总字数: {statistics.get('total_words', 0)}
+- 平均准确度: {statistics.get('average_accuracy', 0):.1f}分
+- 低分字数: {statistics.get('low_score_count', 0)}个
+"""
+
+        if low_score_words and len(low_score_words) > 0:
+            prompt += """
+## 低分字词列表
+
+"""
+            for word in low_score_words[:20]:
+                prompt += f"- {word.get('word', '')}: 准确度{word.get('accuracy', 0)}分, 流利度{word.get('fluency', 0)}分\n"
+
+        prompt += """
+请根据以上信息生成评测报告，包含：
+1. 逻辑完整性评分（综合评分、逻辑性、流畅度、语速）
+2. 结构可视化（论点、结论）
+3. 语速评价（评分、分析、建议）
+4. 内容角度（贴题性、深度、覆盖面）
+5. 逻辑与结构（组织结构、连贯性、论证逻辑）
+6. 表达与用词（用词水平、表达风格、亮点）
+7. 优点
+8. 改进意见
+9. 低分段落分析
+
+严格按照系统提示的JSON格式输出。"""
+
+        return prompt
+
 
     async def analyze_text_structure(
         self,
@@ -470,42 +847,41 @@ class HunyuanService(TencentCloudClient):
         """
         system_prompt = """你是一个专业的文本分析专家。你的任务是分析用户提供的文本，提取其核心思想和逻辑结构。
 
-你必须严格按照以下JSON格式输出分析结果：
+你必须严格按照以下JSON格式输出分析结果，不要添加任何额外内容，只输出JSON：
 
-```json
-{
+{{
     "core_idea": "文本的核心思想/主旨，用一两句话概括",
     "key_points": [
-        {
+        {{
             "title": "要点标题",
             "content": "要点详细内容",
             "importance": "高/中/低"
-        }
+        }}
     ],
-    "logical_structure": {
+    "logical_structure": {{
         "type": "结构类型（如：总分总、递进式、并列式、对比式、因果式等）",
         "description": "对逻辑结构的简要说明",
         "outline": [
-            {
+            {{
                 "level": 1,
                 "title": "一级标题/段落主题",
                 "summary": "该部分的简要概括",
                 "sub_points": [
-                    {
+                    {{
                         "level": 2,
                         "title": "二级要点",
                         "summary": "要点说明"
-                    }
+                    }}
                 ]
-            }
+            }}
         ]
-    },
+    }},
     "arguments": [
-        {
+        {{
             "claim": "论点/观点",
             "evidence": "支撑论据",
             "reasoning": "论证逻辑"
-        }
+        }}
     ],
     "conclusion": "结论或总结",
     "writing_style": "写作风格特点",
@@ -513,8 +889,7 @@ class HunyuanService(TencentCloudClient):
         "改进建议1",
         "改进建议2"
     ]
-}
-```
+}}
 
 分析要求：
 1. 核心思想要精准概括，抓住文本的中心主旨
@@ -524,7 +899,7 @@ class HunyuanService(TencentCloudClient):
 5. 改进建议要具体可行
 
 注意：
-- 必须严格按照JSON格式输出
+- 只输出纯JSON，不要添加markdown代码块标记
 - 如果某些部分在文本中不明显，可以标注为null或空数组
 - 分析要客观中立，基于文本内容"""
 
@@ -571,67 +946,65 @@ class HunyuanService(TencentCloudClient):
         if language == "zh":
             system_prompt = """你是一个专业的语音学和发音教学专家。你的任务是分析绕口令的发音要点，帮助用户更好地练习发音。
 
-你必须严格按照以下JSON格式输出分析结果：
+你必须严格按照以下JSON格式输出分析结果，不要添加任何额外内容，只输出JSON：
 
-```json
-{
+{{
     "title": "绕口令标题/主题",
     "difficulty": "难度等级（简单/中等/困难/专家）",
     "core_phonemes": [
-        {
+        {{
             "phoneme": "音素（如：b、p、m、f等）",
             "pinyin": "对应拼音",
             "ipa": "国际音标",
             "description": "发音描述",
-            "articulation": {
+            "articulation": {{
                 "manner": "发音方式（如：爆破音、摩擦音、鼻音等）",
                 "place": "发音部位（如：双唇、舌尖、舌根等）",
                 "voicing": "清浊（清音/浊音）"
-            },
+            }},
             "examples": ["包含该音素的字词示例"]
-        }
+        }}
     ],
     "acoustic_features": [
-        {
+        {{
             "feature": "声学特征名称",
             "description": "特征描述",
             "key_difference": "与易混淆音的关键差异",
             "measurement": "可量化的声学指标（如：VOT、F1/F2频率等）"
-        }
+        }}
     ],
     "confusion_pairs": [
-        {
+        {{
             "pair": ["音素1", "音素2"],
             "difference": "区分要点",
             "common_errors": "常见错误",
             "practice_tip": "练习建议"
-        }
+        }}
     ],
     "pronunciation_tips": [
-        {
+        {{
             "tip": "发音提示",
             "target_sounds": ["针对的音素"],
             "technique": "具体技巧",
             "practice_method": "练习方法"
-        }
+        }}
     ],
-    "rhythm_pattern": {
+    "rhythm_pattern": {{
         "beat_count": "节拍数",
         "stress_pattern": "重音模式",
         "pause_points": ["建议停顿位置"],
         "speed_suggestion": "建议语速"
-    },
+    }},
     "practice_sequence": [
-        {
+        {{
             "step": 1,
             "focus": "练习重点",
             "content": "练习内容",
             "repetitions": "建议重复次数"
-        }
+        }}
     ],
     "annotated_text": "带音素标注的文本（用[]标注核心音素）"
-}
-```
+}}
 
 分析要求：
 1. 准确识别绕口令中的核心音素和难点
@@ -641,79 +1014,81 @@ class HunyuanService(TencentCloudClient):
 5. 设计合理的练习顺序
 
 注意：
-- 必须严格按照JSON格式输出
+- 只输出纯JSON，不要添加markdown代码块标记
 - 分析要基于语音学原理
 - 建议要具体可操作"""
         else:
             system_prompt = """You are an expert in phonetics and pronunciation teaching. Your task is to analyze tongue twister pronunciation key points to help users practice pronunciation.
 
-You must output the analysis result in the following JSON format:
+You must output the analysis result in the following JSON format, do not add any extra content, only output JSON:
 
-```json
-{
+{{
     "title": "Tongue twister title/theme",
     "difficulty": "Difficulty level (Easy/Medium/Hard/Expert)",
     "core_phonemes": [
-        {
+        {{
             "phoneme": "Phoneme (e.g., /p/, /b/, /θ/, /ð/)",
             "ipa": "IPA symbol",
             "description": "Pronunciation description",
-            "articulation": {
+            "articulation": {{
                 "manner": "Manner of articulation (e.g., plosive, fricative, nasal)",
                 "place": "Place of articulation (e.g., bilabial, alveolar, velar)",
                 "voicing": "Voiced/Voiceless"
-            },
+            }},
             "examples": ["Example words containing this phoneme"]
-        }
+        }}
     ],
     "acoustic_features": [
-        {
+        {{
             "feature": "Acoustic feature name",
             "description": "Feature description",
             "key_difference": "Key difference from similar sounds",
             "measurement": "Measurable acoustic indicators (e.g., VOT, F1/F2 frequency)"
-        }
+        }}
     ],
     "confusion_pairs": [
-        {
+        {{
             "pair": ["phoneme1", "phoneme2"],
             "difference": "Key distinction",
             "common_errors": "Common mistakes",
             "practice_tip": "Practice suggestion"
-        }
+        }}
     ],
     "pronunciation_tips": [
-        {
+        {{
             "tip": "Pronunciation tip",
             "target_sounds": ["Target phonemes"],
             "technique": "Specific technique",
             "practice_method": "Practice method"
-        }
+        }}
     ],
-    "rhythm_pattern": {
+    "rhythm_pattern": {{
         "beat_count": "Number of beats",
         "stress_pattern": "Stress pattern",
         "pause_points": ["Suggested pause positions"],
         "speed_suggestion": "Suggested speed"
-    },
+    }},
     "practice_sequence": [
-        {
+        {{
             "step": 1,
             "focus": "Practice focus",
             "content": "Practice content",
             "repetitions": "Suggested repetitions"
-        }
+        }}
     ],
     "annotated_text": "Text with phoneme annotations (mark core phonemes with [])"
-}
-```
+}}
 
 Requirements:
 1. Accurately identify core phonemes and difficulty points
 2. Explain acoustic feature differences in detail
 3. Identify easily confused phoneme pairs
 4. Provide practical pronunciation tips and practice methods
-5. Design a reasonable practice sequence"""
+5. Design a reasonable practice sequence
+
+Note:
+- Only output pure JSON, do not add markdown code block markers
+- Analysis should be based on phonetic principles"""
 
         user_prompt = f"""请分析以下绕口令的发音要点：
 
