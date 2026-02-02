@@ -17,6 +17,7 @@ from common.credential import Credential
 from tts.speech_synthesizer_ws import SpeechSynthesizer, SpeechSynthesisListener
 
 from app.core.config import settings
+from app.services.s3_storage import s3_storage
 
 
 class StreamingSynthesisListener(SpeechSynthesisListener):
@@ -153,6 +154,53 @@ class TTSService:
             raise Exception(listener.error)
 
         return listener.audio_data
+
+    async def synthesize_and_upload(
+        self,
+        text: str,
+        voice_type: int = 101001,
+        codec: str = "mp3",
+        sample_rate: int = 16000,
+        speed: float = 1.0,
+        volume: float = 0.0
+    ) -> dict:
+        """
+        Synthesize text to speech and upload to S3 storage.
+
+        Args:
+            text: Text to synthesize
+            voice_type: Voice type ID (default: 101001 - 智瑜)
+            codec: Audio format - "mp3" or "pcm" (default: "mp3")
+            sample_rate: Sample rate - 8000 or 16000 (default: 16000)
+            speed: Speech speed, range -2.0 to 6.0 (default: 1.0)
+            volume: Volume adjustment in dB, range -10.0 to 10.0 (default: 0.0)
+
+        Returns:
+            Dict with:
+                - success: bool
+                - url: str (S3 URL if successful)
+                - object_key: str (S3 object key if successful)
+                - error: str (if failed)
+        """
+        # Synthesize audio
+        audio_data = await self.synthesize(
+            text=text,
+            voice_type=voice_type,
+            codec=codec,
+            sample_rate=sample_rate,
+            speed=speed,
+            volume=volume
+        )
+
+        # Upload to S3
+        upload_result = s3_storage.upload_tts_audio(
+            audio_data=audio_data,
+            codec=codec,
+            text=text,
+            subfolder="tts"
+        )
+
+        return upload_result
 
     async def synthesize_stream(
         self,

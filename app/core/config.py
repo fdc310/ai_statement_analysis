@@ -36,6 +36,14 @@ class Settings(BaseSettings):
     # Hunyuan Model Config (hunyuan-turbo = Tencent HY 2.0 Instruct)
     hunyuan_model: str = os.getenv("HUNYUAN_MODEL", "hunyuan-turbo")
 
+    # S3/MinIO Object Storage Config
+    s3_endpoint: str = os.getenv("S3_ENDPOINT", "")
+    s3_access_key: str = os.getenv("S3_ACCESS_KEY", "")
+    s3_secret_key: str = os.getenv("S3_SECRET_KEY", "")
+    s3_bucket_name: str = os.getenv("S3_BUCKET_NAME", "")
+    s3_prefix: str = os.getenv("S3_PREFIX", "")
+    s3_secure: bool = os.getenv("S3_SECURE", "false").lower() == "true"
+
     class Config:
         env_file = ".env"
         case_sensitive = False

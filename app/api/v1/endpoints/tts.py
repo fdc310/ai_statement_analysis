@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-TTS (Text-to-Speech) endpoint - returns complete audio file.
+TTS (Text-to-Speech) endpoint - returns S3 URL for audio file.
 """
 from fastapi import APIRouter, HTTPException, Header, Query
-from fastapi.responses import Response
 from typing import Optional
 from pydantic import BaseModel, Field
 
@@ -62,7 +61,7 @@ async def synthesize_speech(
     x_signature: Optional[str] = Header(None, alias="X-Signature")
 ):
     """
-    Synthesize text to speech and return complete audio file.
+    Synthesize text to speech and return S3 URL.
 
     **Headers**:
     - X-Signature: AES encrypted signature (required)
@@ -90,7 +89,15 @@ async def synthesize_speech(
     - 101050: WeJack (英文女声)
     - 101051: WeRose (英文男声)
 
-    **Response**: Complete audio file (Content-Type based on codec)
+    **Response**:
+    ```json
+    {
+        "success": true,
+        "url": "http://s3dev.fzfengzhi.cn/public/...",
+        "object_key": "liaoyu/upload/tts/...",
+        "size": 12345
+    }
+    ```
     """
     verify_signature(x_signature)
 
@@ -103,8 +110,8 @@ async def synthesize_speech(
     if request.sample_rate not in (8000, 16000):
         raise HTTPException(status_code=400, detail="Sample rate must be 8000 or 16000")
 
-    # Synthesize and get complete audio data
-    audio_data = await tts_service.synthesize(
+    # Synthesize and upload to S3
+    result = await tts_service.synthesize_and_upload(
         text=request.text,
         voice_type=request.voice_type,
         codec=request.codec,
@@ -113,16 +120,16 @@ async def synthesize_speech(
         volume=request.volume
     )
 
-    content_type = "audio/mpeg" if request.codec == "mp3" else "audio/wav"
+    if not result["success"]:
+        raise HTTPException(status_code=500, detail=result.get("error", "Upload failed"))
 
-    return Response(
-        content=audio_data,
-        media_type=content_type,
-        headers={
-            "Content-Disposition": f"attachment; filename=speech.{request.codec}",
-            "Content-Length": str(len(audio_data))
-        }
-    )
+    return {
+        "success": True,
+        "url": result["url"],
+        "object_key": result.get("object_key"),
+        "bucket": result.get("bucket"),
+        "size": result.get("size")
+    }
 
 
 @router.get("/synthesize")
@@ -136,9 +143,19 @@ async def synthesize_speech_get(
     x_signature: Optional[str] = Header(None, alias="X-Signature")
 ):
     """
-    Synthesize text to speech and return complete audio file (GET method).
+    Synthesize text to speech and return S3 URL (GET method).
 
     Same as POST /synthesize but with query parameters.
+
+    **Response**:
+    ```json
+    {
+        "success": true,
+        "url": "http://s3dev.fzfengzhi.cn/public/...",
+        "object_key": "liaoyu/upload/tts/...",
+        "size": 12345
+    }
+    ```
     """
     verify_signature(x_signature)
 
@@ -151,7 +168,8 @@ async def synthesize_speech_get(
     if sample_rate not in (8000, 16000):
         raise HTTPException(status_code=400, detail="Sample rate must be 8000 or 16000")
 
-    audio_data = await tts_service.synthesize(
+    # Synthesize and upload to S3
+    result = await tts_service.synthesize_and_upload(
         text=text,
         voice_type=voice_type,
         codec=codec,
@@ -160,16 +178,16 @@ async def synthesize_speech_get(
         volume=volume
     )
 
-    content_type = "audio/mpeg" if codec == "mp3" else "audio/wav"
+    if not result["success"]:
+        raise HTTPException(status_code=500, detail=result.get("error", "Upload failed"))
 
-    return Response(
-        content=audio_data,
-        media_type=content_type,
-        headers={
-            "Content-Disposition": f"attachment; filename=speech.{codec}",
-            "Content-Length": str(len(audio_data))
-        }
-    )
+    return {
+        "success": True,
+        "url": result["url"],
+        "object_key": result.get("object_key"),
+        "bucket": result.get("bucket"),
+        "size": result.get("size")
+    }
 
 
 @router.get("/voices")
