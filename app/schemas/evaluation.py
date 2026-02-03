@@ -323,3 +323,69 @@ class TongueTwisterResponse(BaseModel):
     tongue_twister: str = Field(..., description="绕口令原文")
     analysis_result: Optional[str] = Field(None, description="发音分析结果（JSON格式字符串）")
     error: Optional[str] = Field(None, description="错误信息")
+
+
+class SentenceInterpretationRequest(BaseModel):
+    """Request model for sentence interpretation."""
+
+    text: str = Field(..., description="待解读的句子内容", min_length=1, max_length=5000)
+    custom_prompt: Optional[str] = Field(None, description="自定义解读要求")
+    message_id: Optional[str] = Field(None, description="消息ID，不传则自动生成UUID")
+
+
+class SentenceInterpretationResponse(BaseModel):
+    """Response model for sentence interpretation."""
+
+    success: bool = Field(..., description="是否成功")
+    message: str = Field(..., description="状态消息")
+    message_id: str = Field(..., description="消息ID")
+    interpretation: Optional[dict] = Field(None, description="AI解读结果JSON对象，包含中心内容、朗读重点、注意事项")
+    error: Optional[str] = Field(None, description="错误信息")
+
+
+class StoryReadingRequest(BaseModel):
+    """Request model for story reading evaluation."""
+
+    audio_url: HttpUrl = Field(..., description="音频文件URL")
+    story_text: str = Field(..., description="短故事文本，用户要围绕此故事发挥", min_length=10, max_length=2000)
+    message_id: Optional[str] = Field(None, description="消息ID，不传则自动生成UUID")
+
+
+class StoryReadingResponse(BaseModel):
+    """Response model for story reading evaluation."""
+
+    success: bool = Field(..., description="是否成功")
+    message: str = Field(..., description="状态消息")
+    message_id: str = Field(..., description="消息ID")
+
+    # 结构完整性分析
+    structure_analysis: Optional[dict] = Field(
+        None, description="结构完整性分析（开头、发展、高潮、结尾）"
+    )
+
+    # 逻辑连贯性分析
+    logic_analysis: Optional[dict] = Field(
+        None, description="逻辑连贯性分析（时间跳跃、因果错误、事件遗漏、逻辑矛盾）"
+    )
+
+    # 语言流畅度分析
+    fluency_analysis: Optional[dict] = Field(
+        None, description="语言流畅度分析（长停顿、重复修正、填空词、完整度）"
+    )
+
+    # 事件分布分析
+    event_distribution: Optional[dict] = Field(
+        None, description="事件分布（各事件的时间位置和时长）"
+    )
+
+    # 待改进
+    improvements: List[str] = Field(
+        default_factory=list, description="待改进建议列表"
+    )
+
+    # ASR时间戳数据
+    asr_data: Optional[dict] = Field(
+        None, description="ASR识别结果（带时间戳）"
+    )
+
+    error: Optional[str] = Field(None, description="错误信息")

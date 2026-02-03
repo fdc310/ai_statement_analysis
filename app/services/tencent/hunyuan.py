@@ -1106,6 +1106,233 @@ Note:
         result = await self.chat(messages, temperature=0.3)
         return result["content"]
 
+    async def analyze_sentence_interpretation(
+        self,
+        text: str,
+        custom_prompt: Optional[str] = None
+    ) -> str:
+        """
+        Analyze sentence for reading interpretation.
+
+        Args:
+            text: Sentence to analyze
+            custom_prompt: Optional custom analysis requirements
+
+        Returns:
+            Analysis result in JSON format
+        """
+        system_prompt = """你是一个专业的语文朗读指导专家。你的任务是分析给定的句子，提供朗读指导建议。
+
+你必须严格按照以下JSON格式输出，不要添加任何额外内容，只输出JSON：
+
+{{
+    "center_content": "<句子的中心内容/主旨，用简短语言概括>",
+    "reading_points": [
+        "<朗读重点1>",
+        "<朗读重点2>",
+        "<朗读重点3>"
+    ],
+    "reading_notes": [
+        "<注意事项1>",
+        "<注意事项2>",
+        "<注意事项3>"
+    ]
+}}
+
+分析要求：
+1. 中心内容：准确把握句子的核心含义和主旨
+2. 朗读重点：找出需要重读、强调的关键词或短语，最多3-5个
+3. 注意事项：指出朗读时的语气、停顿、语速、情感等要点，最多3-5个
+4. 每个要点要简练，每个不超过20字
+5. 注意：
+- 只输出纯JSON，不要添加markdown代码块标记
+- 分析要基于句子的语言特征"""
+
+        user_prompt = f"""请分析以下句子的朗读要点：
+
+## 待分析句子
+
+{text}
+"""
+
+        if custom_prompt:
+            user_prompt += f"""
+## 额外分析要求
+
+{custom_prompt}
+"""
+
+        user_prompt += """
+请严格按照JSON格式输出分析结果。"""
+
+        messages = [
+            {"Role": "system", "Content": system_prompt},
+            {"Role": "user", "Content": user_prompt}
+        ]
+
+        result = await self.chat(messages, temperature=0.3)
+        return result["content"]
+
+    async def analyze_story_reading(
+        self,
+        speech_text: str,
+        story_text: str,
+        word_info_list: Optional[list] = None,
+        audio_duration: Optional[float] = None,
+        language: str = "zh"
+    ) -> dict:
+        """
+        Analyze story reading performance.
+
+        Args:
+            speech_text: Transcribed speech text
+            story_text: Reference story text
+            word_info_list: List of word-level timestamp data from ASR
+            audio_duration: Audio duration in seconds
+            language: Language code ('zh' for Chinese, 'en' for English)
+
+        Returns:
+            Analysis result in JSON format with:
+            - structure_analysis: Structure completeness analysis
+            - logic_analysis: Logic coherence analysis
+            - fluency_analysis: Language fluency analysis
+            - event_distribution: Event time distribution
+            - improvements: Suggestions for improvement
+        """
+        # Build timestamp context
+        timestamp_info = ""
+        if word_info_list and len(word_info_list) > 0:
+            timestamp_info = "\n## 词级别时间戳信息\n\n| 词语 | 开始时间(ms) | 结束时间(ms) | 持续时长(ms) |\n|------|-------------|-------------|-------------|\n"
+            for w in word_info_list[:100]:  # Limit to first 100 words
+                timestamp_info += f"| {w.get('word', '')} | {w.get('begin_time', 0)} | {w.get('end_time', 0)} | {w.get('duration', 0)} |\n"
+
+        if audio_duration:
+            timestamp_info += f"\n总音频时长: {audio_duration:.1f} 秒\n"
+
+        system_prompt = """你是一个专业的故事阅读评测专家。你的任务是分析用户的故事阅读表现，评估其结构完整性、逻辑连贯性、语言流畅度和事件分布情况。
+
+你必须严格按照以下JSON格式输出分析结果，不要添加任何额外内容，只输出JSON：
+
+{
+    "structure_analysis": {
+        "opening": "<开头情况：有/无，简短描述>",
+        "development": "<发展情况：描述事件发展过程>",
+        "climax": "<高潮情况：有/无，简短描述>",
+        "ending": "<结尾情况：有/无/仓促，简短描述>",
+        "overall_assessment": "<整体结构评价>"
+    },
+    "logic_analysis": {
+        "time_jumps": <时间跳跃次数>,
+        "causal_errors": <因果错误次数>,
+        "missing_events": <事件遗漏次数>,
+        "logical_contradictions": <逻辑矛盾次数>,
+        "overall_assessment": "<整体逻辑评价>"
+    },
+    "fluency_analysis": {
+        "long_pauses_count": <长停顿(>3秒)次数>,
+        "repetition_count": <重复修正次数>,
+        "filler_words_count": <填充词次数>,
+        "sentence_completion_rate": <句子完整度0-100>,
+        "overall_assessment": "<整体流畅度评价>"
+    },
+    "event_distribution": {
+        "events": [
+            {
+                "name": "<事件名称>",
+                "start_time_ms": <开始时间毫秒>,
+                "end_time_ms": <结束时间毫秒>,
+                "duration_seconds": <持续时间秒>,
+                "assessment": "<该事件评价>"
+            }
+        ],
+        "transition_time": "<过渡时间描述>",
+        "overall_assessment": "<整体事件分布评价>"
+    },
+    "improvements": [
+        "<改进建议1>",
+        "<改进建议2>",
+        "<改进建议3>"
+    ]
+}
+
+分析要求：
+1. 结构完整性：分析故事是否有完整的开头、发展、高潮、结尾
+2. 逻辑连贯性：分析是否存在时间跳跃、因果错误、事件遗漏、逻辑矛盾
+3. 语言流畅度：基于时间戳数据分析长停顿、重复修正、填充词使用情况
+4. 事件分布：根据时间戳分析各事件的时长和分布
+5. 待改进：给出具体可行的改进建议
+
+时间戳分析规则：
+- 长停顿：相邻词语间隔超过3000ms（3秒）
+- 重复修正：相同或相似词语在短时间内重复出现
+- 填充词：如"啊"、"呃"、"那个"、"这个"、"嗯"等
+
+注意：
+- 只输出纯JSON，不要添加markdown代码块标记
+- 如果无法从时间戳数据中分析某些指标，给出合理推断
+- 改进建议要具体、可操作
+- 事件分布要根据时间戳分析，如果没有明确事件划分，根据内容合理划分"""
+
+        user_prompt = f"""请分析以下用户的故事阅读表现：
+
+## 原始故事文本
+
+{story_text}
+
+## 用户阅读内容
+
+{speech_text}
+{timestamp_info}
+
+请严格按照JSON格式输出分析结果，包含结构完整性、逻辑连贯性、语言流畅度、事件分布和待改进建议。"""
+
+        messages = [
+            {"Role": "system", "Content": system_prompt},
+            {"Role": "user", "Content": user_prompt}
+        ]
+
+        result = await self.chat(messages, temperature=0.3)
+        content = result["content"]
+
+        # Parse JSON
+        try:
+            import re
+            json_match = re.search(r'\{[\s\S]*\}', content)
+            if json_match:
+                return json.loads(json_match.group())
+            return json.loads(content)
+        except json.JSONDecodeError:
+            # Return default structure if parsing fails
+            return {
+                "structure_analysis": {
+                    "opening": "无法解析",
+                    "development": "无法解析",
+                    "climax": "无法解析",
+                    "ending": "无法解析",
+                    "overall_assessment": "无法解析AI响应"
+                },
+                "logic_analysis": {
+                    "time_jumps": 0,
+                    "causal_errors": 0,
+                    "missing_events": 0,
+                    "logical_contradictions": 0,
+                    "overall_assessment": "无法解析AI响应"
+                },
+                "fluency_analysis": {
+                    "long_pauses_count": 0,
+                    "repetition_count": 0,
+                    "filler_words_count": 0,
+                    "sentence_completion_rate": 0,
+                    "overall_assessment": "无法解析AI响应"
+                },
+                "event_distribution": {
+                    "events": [],
+                    "transition_time": "无法解析",
+                    "overall_assessment": "无法解析AI响应"
+                },
+                "improvements": ["无法解析AI响应，请稍后重试"]
+            }
+
 
 # Singleton instance
 hunyuan_service = HunyuanService()

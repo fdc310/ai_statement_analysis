@@ -61,7 +61,8 @@ class ASRService:
     def _sync_recognize(
         self,
         audio_data: bytes,
-        engine_type: str
+        engine_type: str,
+        word_info: int = 0
     ) -> dict:
         """Synchronous recognition using Flash Recognizer SDK."""
         import logging
@@ -77,10 +78,10 @@ class ASRService:
         req.set_filter_modal(0)
         req.set_filter_punc(0)
         req.set_convert_num_mode(1)
-        req.set_word_info(0)
+        req.set_word_info(word_info)  # 0: no timestamp, 1: word timestamp (no punctuation), 2: word timestamp (with punctuation)
         req.set_first_channel_only(1)
 
-        logger.info(f"ASR: audio_data size = {len(audio_data)} bytes")
+        logger.info(f"ASR: audio_data size = {len(audio_data)} bytes, word_info = {word_info}")
 
         # Execute recognition
         result_data = recognizer.recognize(req, audio_data)
@@ -97,7 +98,8 @@ class ASRService:
         self,
         audio_data: bytes,
         engine_type: str = "16k_zh",
-        voice_format: str = "wav"
+        voice_format: str = "wav",
+        word_info: int = 0
     ) -> dict:
         """
         Recognize speech in audio using Flash Recognizer API.
@@ -108,9 +110,10 @@ class ASRService:
             audio_data: Audio file bytes (any format supported by ffmpeg).
             engine_type: Recognition engine type (16k_zh, 16k_en, etc.)
             voice_format: Ignored - audio will be converted to WAV.
+            word_info: Word level timestamp. 0: no timestamp, 1: word timestamp (no punctuation), 2: word timestamp (with punctuation).
 
         Returns:
-            Recognition result dict with 'text' and 'raw_response'.
+            Recognition result dict with 'text', 'word_info_list', and 'raw_response'.
         """
         # Convert audio to standard format: 16kHz, 16bit, mono, WAV
         audio_data = await self.convert_audio(audio_data)
@@ -119,7 +122,8 @@ class ASRService:
         result = await asyncio.to_thread(
             self._sync_recognize,
             audio_data,
-            engine_type
+            engine_type,
+            word_info
         )
 
         # Check for errors
@@ -129,13 +133,26 @@ class ASRService:
 
         # Extract text from flash_result
         text = ""
+        word_info_list = []
         flash_result = result.get("flash_result", [])
         if flash_result:
             # Get text from first channel
             text = flash_result[0].get("text", "")
+            # Extract word info if available
+            if "sentence_list" in flash_result[0]:
+                for sentence in flash_result[0]["sentence_list"]:
+                    if "word_list" in sentence:
+                        for word in sentence["word_list"]:
+                            word_info_list.append({
+                                "word": word.get("word", ""),
+                                "begin_time": word.get("begin_time", 0),
+                                "end_time": word.get("end_time", 0),
+                                "duration": word.get("end_time", 0) - word.get("begin_time", 0)
+                            })
 
         return {
             "text": text,
+            "word_info_list": word_info_list,
             "raw_response": result
         }
 

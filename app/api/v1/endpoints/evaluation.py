@@ -33,7 +33,11 @@ from app.schemas.evaluation import (
     TextAnalysisRequest,
     TextAnalysisResponse,
     TongueTwisterRequest,
-    TongueTwisterResponse
+    TongueTwisterResponse,
+    SentenceInterpretationRequest,
+    SentenceInterpretationResponse,
+    StoryReadingRequest,
+    StoryReadingResponse
 )
 from app.services.tencent import asr_service, soe_service, hunyuan_service
 
@@ -1310,5 +1314,287 @@ async def analyze_tongue_twister(
             message="Analysis failed",
             message_id=msg_id,
             tongue_twister=request.text,
+            error=str(e)
+        )
+
+
+@router.post("/sentence-interpretation", response_model=SentenceInterpretationResponse)
+async def analyze_sentence_interpretation(
+    request: SentenceInterpretationRequest,
+    x_signature: Optional[str] = Header(None, alias="X-Signature")
+) -> SentenceInterpretationResponse:
+    """
+    句子解读接口 - 提供中心内容、朗读重点和注意事项。
+
+    本接口对提供的句子进行深度分析，提取：
+    - 中心内容：句子的核心思想/主旨
+    - 朗读重点：需要重读、强调的关键词或短语
+    - 注意事项：朗读时的语气、停顿、语速、情感等要点
+
+    **功能特性**:
+    - 支持中英文句子分析
+    - 智能提取朗读要点和注意事项
+    - 可自定义分析要求
+
+    **Headers**:
+    - X-Signature: AES加密签名（必填）
+
+    **Request body**:
+    ```json
+    {
+        "text": "待解读的句子内容...",
+        "custom_prompt": "可选的自定义分析要求",
+        "message_id": "可选的消息ID"
+    }
+    ```
+
+    **Response**:
+    ```json
+    {
+        "success": true,
+        "message": "Analysis completed successfully",
+        "message_id": "uuid",
+        "interpretation": {
+            "center_content": "句子的中心内容",
+            "reading_points": ["朗读重点1", "朗读重点2", "朗读重点3"],
+            "reading_notes": ["注意事项1", "注意事项2", "注意事项3"]
+        }
+    }
+    ```
+
+    **Interpretation Result Structure** (JSON格式):
+    ```json
+    {
+        "center_content": "句子的中心内容/主旨，用简短语言概括",
+        "reading_points": [
+            "朗读重点1",
+            "朗读重点2",
+            "朗读重点3"
+        ],
+        "reading_notes": [
+            "注意事项1",
+            "注意事项2",
+            "注意事项3"
+        ]
+    }
+    ```
+    """
+    verify_signature(x_signature)
+
+    msg_id = request.message_id or str(uuid.uuid4())
+
+    try:
+        analysis_result = await hunyuan_service.analyze_sentence_interpretation(
+            text=request.text,
+            custom_prompt=request.custom_prompt
+        )
+
+        # 解析 JSON
+        import json
+        import re
+        try:
+            json_match = re.search(r'\{[\s\S]*\}', analysis_result)
+            if json_match:
+                interpretation_data = json.loads(json_match.group())
+            else:
+                interpretation_data = json.loads(analysis_result)
+        except json.JSONDecodeError:
+            interpretation_data = {
+                "center_content": "无法解析AI响应",
+                "reading_points": [],
+                "reading_notes": []
+            }
+
+        return SentenceInterpretationResponse(
+            success=True,
+            message="Analysis completed successfully",
+            message_id=msg_id,
+            interpretation=interpretation_data
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        return SentenceInterpretationResponse(
+            success=False,
+            message="Analysis failed",
+            message_id=msg_id,
+            error=str(e)
+        )
+
+
+@router.post("/story-reading", response_model=StoryReadingResponse)
+async def analyze_story_reading(
+    request: StoryReadingRequest,
+    x_signature: Optional[str] = Header(None, alias="X-Signature")
+) -> StoryReadingResponse:
+    """
+    故事阅读评测接口 - 分析用户围绕小故事的阅读表现。
+
+    本接口通过ASR识别音频内容（带时间戳），对比原始故事文本，分析：
+    - 结构完整性：开头、发展、高潮、结尾
+    - 逻辑连贯性：时间跳跃、因果错误、事件遗漏、逻辑矛盾
+    - 语言流畅度：长停顿、重复修正、填充词、句子完整度
+    - 事件分布：各事件的时间位置和时长
+    - 待改进建议
+
+    **功能特性**:
+    - ASR带时间戳识别（WordInfo=1）
+    - 对比原始故事文本分析内容完整性
+    - 基于时间戳分析语言流畅度
+    - 分析事件分布和时间分配
+
+    **Headers**:
+    - X-Signature: AES加密签名（必填）
+
+    **Request body**:
+    ```json
+    {
+        "audio_url": "https://example.com/audio.mp3",
+        "story_text": "从前有个小孩叫小明，他每天去河边钓鱼...",
+        "message_id": "可选的消息ID"
+    }
+    ```
+
+    **参数说明**:
+    | 参数名 | 类型 | 必填 | 说明 |
+    |--------|------|------|------|
+    | audio_url | string | 是 | 音频文件URL |
+    | story_text | string | 是 | 短故事文本，用户要围绕此故事发挥 |
+    | message_id | string | 否 | 消息ID，不传则自动生成UUID |
+
+    **Response**:
+    ```json
+    {
+        "success": true,
+        "message": "Analysis completed successfully",
+        "message_id": "uuid",
+
+        "structure_analysis": {
+            "opening": "有",
+            "development": "事件1+事件2",
+            "climax": "无",
+            "ending": "有但仓促",
+            "overall_assessment": "结构基本完整，但缺少高潮，结尾仓促"
+        },
+        "logic_analysis": {
+            "time_jumps": 0,
+            "causal_errors": 0,
+            "missing_events": 1,
+            "logical_contradictions": 0,
+            "overall_assessment": "逻辑连贯，遗漏了一个次要事件"
+        },
+        "fluency_analysis": {
+            "long_pauses_count": 2,
+            "repetition_count": 3,
+            "filler_words_count": 15,
+            "sentence_completion_rate": 85,
+            "overall_assessment": "流畅度良好，有一些停顿和填充词"
+        },
+        "event_distribution": {
+            "events": [
+                {
+                    "name": "事件1",
+                    "start_time_ms": 0,
+                    "end_time_ms": 22000,
+                    "duration_seconds": 22,
+                    "assessment": "主题明确"
+                },
+                {
+                    "name": "事件2",
+                    "start_time_ms": 22000,
+                    "end_time_ms": 50000,
+                    "duration_seconds": 28,
+                    "assessment": "细节过多"
+                },
+                {
+                    "name": "过渡",
+                    "start_time_ms": 50000,
+                    "end_time_ms": 55000,
+                    "duration_seconds": 5,
+                    "assessment": ""
+                },
+                {
+                    "name": "结尾",
+                    "start_time_ms": 55000,
+                    "end_time_ms": 60000,
+                    "duration_seconds": 5,
+                    "assessment": "过短"
+                }
+            ],
+            "transition_time": "5秒",
+            "overall_assessment": "事件2描述过长，结尾仓促"
+        },
+        "improvements": [
+            "事件2描述过长(28秒)",
+            "缺少事件3",
+            "结尾仓促，无总结"
+        ],
+        "asr_data": {
+            "text": "识别的完整文本",
+            "word_info_list": [
+                {"word": "从前", "begin_time": 0, "end_time": 500, "duration": 500}
+            ]
+        },
+        "error": null
+    }
+    ```
+    """
+    verify_signature(x_signature)
+
+    msg_id = request.message_id or str(uuid.uuid4())
+    audio_url = str(request.audio_url)
+
+    try:
+        # Download audio
+        audio_data = await asr_service.download_audio(audio_url)
+
+        # Recognize with word_info=1 to get timestamps
+        asr_result = await asr_service.recognize_audio(
+            audio_data,
+            engine_type="16k_zh",
+            word_info=1
+        )
+
+        speech_text = asr_result.get("text", "")
+        word_info_list = asr_result.get("word_info_list", [])
+
+        # Calculate audio duration from word timestamps
+        audio_duration = None
+        if word_info_list:
+            last_word = word_info_list[-1]
+            audio_duration = last_word.get("end_time", 0) / 1000  # Convert ms to seconds
+
+        # Analyze story reading with Hunyuan
+        analysis_result = await hunyuan_service.analyze_story_reading(
+            speech_text=speech_text,
+            story_text=request.story_text,
+            word_info_list=word_info_list,
+            audio_duration=audio_duration,
+            language="zh"
+        )
+
+        return StoryReadingResponse(
+            success=True,
+            message="Analysis completed successfully",
+            message_id=msg_id,
+            structure_analysis=analysis_result.get("structure_analysis"),
+            logic_analysis=analysis_result.get("logic_analysis"),
+            fluency_analysis=analysis_result.get("fluency_analysis"),
+            event_distribution=analysis_result.get("event_distribution"),
+            improvements=analysis_result.get("improvements", []),
+            asr_data={
+                "text": speech_text,
+                "word_info_list": word_info_list
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        return StoryReadingResponse(
+            success=False,
+            message="Analysis failed",
+            message_id=msg_id,
             error=str(e)
         )
