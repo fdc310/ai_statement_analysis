@@ -12,9 +12,17 @@ services:
       - TENCENT_APPID=${TENCENT_APPID}
       - AES_KEY=${AES_KEY}
       - AES_IV=${AES_IV}
-      - REQUEST_EXPIRE_SECONDS=300
-      - API_HOST=0.0.0.0
-      - API_PORT=8000
+      - REQUEST_EXPIRE_SECONDS=${REQUEST_EXPIRE_SECONDS}
+      - API_HOST=${API_HOST}
+      - API_PORT=${API_PORT}
+      - DEBUG=${DEBUG}
+      - HUNYUAN_MODEL=${HUNYUAN_MODEL}
+      - S3_ENDPOINT=${S3_ENDPOINT}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME}
+      - S3_PREFIX=${S3_PREFIX}
+      - S3_SECURE=${S3_SECURE}
     volumes:
       - ./uploads:/app/uploads
     restart: unless-stopped
