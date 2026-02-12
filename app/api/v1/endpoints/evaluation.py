@@ -11,6 +11,7 @@ import uuid
 import asyncio
 import os
 import string
+import base64
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Header, BackgroundTasks
 from typing import Optional
 
@@ -37,9 +38,13 @@ from app.schemas.evaluation import (
     SentenceInterpretationRequest,
     SentenceInterpretationResponse,
     StoryReadingRequest,
-    StoryReadingResponse
+    StoryReadingResponse,
+    TongueTwisterReadingRequest,
+    TongueTwisterReadingResponse,
+    VoiceChatRequest,
+    VoiceChatResponse
 )
-from app.services.tencent import asr_service, soe_service, hunyuan_service
+from app.services.tencent import asr_service, soe_service, hunyuan_service, tts_service
 
 router = APIRouter()
 
@@ -1595,6 +1600,273 @@ async def analyze_story_reading(
         return StoryReadingResponse(
             success=False,
             message="Analysis failed",
+            message_id=msg_id,
+            error=str(e)
+        )
+
+
+@router.post("/tongue-twister-reading", response_model=TongueTwisterReadingResponse)
+async def evaluate_tongue_twister_reading(
+    request: TongueTwisterReadingRequest,
+    x_signature: Optional[str] = Header(None, alias="X-Signature")
+) -> TongueTwisterReadingResponse:
+    """
+    绕口令语音评测接口 - 分析用户朗读绕口令的语音表现。
+
+    本接口通过ASR识别音频内容（带时间戳），结合SOE发音评分，
+    再由混元AI综合分析优势和待提升之处：
+    - 优势：发音准确性、流畅度、节奏感等方面的亮点
+    - 待提升-多读：朗读中多出原文没有的字词
+    - 待提升-漏读：原文中有但朗读中遗漏的字词
+    - 待提升-发音问题：结合SOE低分字词分析具体发音问题
+    - 流畅度分析：基于时间戳分析长停顿、节奏和语速
+    - 练习建议：针对具体问题给出可操作的练习方法
+
+    **功能特性**:
+    - ASR带时间戳识别（WordInfo=1）
+    - SOE发音评测（句子模式，对齐原文评分）
+    - ASR与SOE并行执行提升性能
+    - 混元AI综合分析优势和待提升
+
+    **Headers**:
+    - X-Signature: AES加密签名（必填）
+
+    **Request body**:
+    ```json
+    {
+        "audio_url": "https://example.com/tongue-twister.mp3",
+        "tongue_twister_text": "八百标兵奔北坡，炮兵并排北边跑",
+        "message_id": "可选的消息ID"
+    }
+    ```
+
+    **参数说明**:
+    | 参数名 | 类型 | 必填 | 说明 |
+    |--------|------|------|------|
+    | audio_url | string | 是 | 绕口令音频文件URL |
+    | tongue_twister_text | string | 是 | 绕口令原文文本 |
+    | message_id | string | 否 | 消息ID，不传则自动生成UUID |
+    """
+    verify_signature(x_signature)
+
+    msg_id = request.message_id or str(uuid.uuid4())
+    audio_url = str(request.audio_url)
+
+    try:
+        # Download audio
+        audio_data = await asr_service.download_audio(audio_url)
+
+        # Run ASR (with timestamps) and SOE (with ref_text) in parallel
+        asr_result, soe_result = await asyncio.gather(
+            asr_service.recognize_audio(
+                audio_data,
+                engine_type="16k_zh",
+                word_info=1
+            ),
+            soe_service.evaluate_audio(
+                audio_data,
+                ref_text=request.tongue_twister_text,
+                eval_mode=1,
+                score_coeff=1.0,
+                server_type=0
+            )
+        )
+
+        # Extract ASR results
+        speech_text = asr_result.get("text", "")
+        word_info_list = asr_result.get("word_info_list", [])
+
+        # Extract SOE results
+        scores_data = soe_result.get("scores", {})
+        low_score_words_data = soe_result.get("low_score_words", [])
+        statistics_data = soe_result.get("statistics", {})
+
+        # Calculate audio duration from timestamps
+        audio_duration = None
+        if word_info_list:
+            last_word = word_info_list[-1]
+            audio_duration = last_word.get("end_time", 0) / 1000
+
+        # Build typed score objects for response
+        speech_scores = SpeechScores(
+            pronunciation_accuracy=scores_data.get("pronunciation_accuracy", 0),
+            pronunciation_fluency=scores_data.get("pronunciation_fluency", 0),
+            pronunciation_completion=scores_data.get("pronunciation_completion", 0),
+            suggested_score=scores_data.get("suggested_score", 0),
+            overall_score=scores_data.get("overall_score", 0)
+        )
+
+        statistics = EvaluationStatistics(
+            total_words=statistics_data.get("total_words", 0),
+            average_accuracy=statistics_data.get("average_accuracy", 0),
+            low_score_count=statistics_data.get("low_score_count", 0)
+        )
+
+        # Call Hunyuan for AI analysis
+        analysis_result = await hunyuan_service.analyze_tongue_twister_reading(
+            speech_text=speech_text,
+            tongue_twister_text=request.tongue_twister_text,
+            word_info_list=word_info_list,
+            low_score_words=low_score_words_data,
+            scores_data=scores_data,
+            statistics_data=statistics_data,
+            audio_duration=audio_duration,
+            language="zh"
+        )
+
+        return TongueTwisterReadingResponse(
+            success=True,
+            message="Analysis completed successfully",
+            message_id=msg_id,
+            speech_scores=speech_scores,
+            statistics=statistics,
+            strengths=analysis_result.get("strengths", []),
+            improvements=analysis_result.get("improvements"),
+            fluency_analysis=analysis_result.get("fluency_analysis"),
+            overall_assessment=analysis_result.get("overall_assessment"),
+            practice_suggestions=analysis_result.get("practice_suggestions", []),
+            asr_data={
+                "text": speech_text,
+                "word_info_list": word_info_list
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        return TongueTwisterReadingResponse(
+            success=False,
+            message="Analysis failed",
+            message_id=msg_id,
+            error=str(e)
+        )
+
+
+# 预设场景系统提示词
+VOICE_CHAT_SCENE_PROMPTS = {
+    "interview": "你是一位专业的面试官，正在对候选人进行面试。请根据候选人的回答进行追问、评价或提出新的面试问题。语气专业但友好，回答简洁有针对性。",
+    "daily": "你是一个友好的对话伙伴，正在进行日常中文对话练习。请用自然、口语化的方式回应，适当引导话题，保持对话轻松有趣。回答简洁，适合口语交流。",
+    "customer_service": "你是一位专业的客服人员，正在处理客户的咨询和问题。请耐心倾听，准确回答问题，提供有效的解决方案。语气礼貌专业。",
+}
+
+DEFAULT_VOICE_CHAT_PROMPT = "你是一个智能对话助手，正在与用户进行语音对话。请用自然、简洁的方式回应，回答适合语音播报的长度，避免过长的文字。"
+
+
+@router.post("/voice-chat", response_model=VoiceChatResponse)
+async def voice_chat(
+    request: VoiceChatRequest,
+    x_signature: Optional[str] = Header(None, alias="X-Signature")
+) -> VoiceChatResponse:
+    """
+    语音对话接口 - 支持情景对话（面试、日常对话等）。
+
+    接收用户语音URL，ASR转文字（带时间戳），发送给AI对话，
+    再将AI回复通过TTS转为语音，返回AI文本 + 音频Base64数据。
+
+    **功能特性**:
+    - ASR带时间戳识别（WordInfo=1）
+    - 支持多轮对话（客户端传递历史messages）
+    - 支持预设场景（interview/daily/customer_service）和自定义system_prompt
+    - AI回复通过TTS转语音，返回Base64编码的mp3音频
+
+    **Headers**:
+    - X-Signature: AES加密签名（必填）
+
+    **Request body**:
+    ```json
+    {
+        "audio_url": "https://example.com/user-speech.mp3",
+        "messages": [
+            {"role": "user", "content": "你好，我来面试的"},
+            {"role": "assistant", "content": "你好，请先做一下自我介绍吧"}
+        ],
+        "system_prompt": null,
+        "scene": "interview",
+        "voice_type": 101001,
+        "message_id": "可选的消息ID"
+    }
+    ```
+
+    **参数说明**:
+    | 参数名 | 类型 | 必填 | 说明 |
+    |--------|------|------|------|
+    | audio_url | string | 是 | 用户语音文件URL |
+    | messages | array | 否 | 对话历史（不含本次语音） |
+    | system_prompt | string | 否 | 自定义系统提示词，优先级高于scene |
+    | scene | string | 否 | 预设场景：interview/daily/customer_service |
+    | voice_type | int | 否 | TTS音色ID，默认101001(智瑜-女) |
+    | message_id | string | 否 | 消息ID，不传则自动生成UUID |
+    """
+    verify_signature(x_signature)
+
+    msg_id = request.message_id or str(uuid.uuid4())
+    audio_url = str(request.audio_url)
+
+    try:
+        # 1. Download and recognize audio with timestamps
+        audio_data = await asr_service.download_audio(audio_url)
+        asr_result = await asr_service.recognize_audio(
+            audio_data,
+            engine_type="16k_zh",
+            word_info=1
+        )
+
+        speech_text = asr_result.get("text", "")
+        word_info_list = asr_result.get("word_info_list", [])
+
+        # 2. Build conversation messages for Hunyuan
+        # Determine system prompt: custom > scene preset > default
+        if request.system_prompt:
+            system_content = request.system_prompt
+        elif request.scene and request.scene in VOICE_CHAT_SCENE_PROMPTS:
+            system_content = VOICE_CHAT_SCENE_PROMPTS[request.scene]
+        else:
+            system_content = DEFAULT_VOICE_CHAT_PROMPT
+
+        hunyuan_messages = [{"Role": "system", "Content": system_content}]
+
+        # Append conversation history
+        if request.messages:
+            for msg in request.messages:
+                hunyuan_messages.append({
+                    "Role": msg.role,
+                    "Content": msg.content
+                })
+
+        # Append current user message from ASR
+        hunyuan_messages.append({"Role": "user", "Content": speech_text})
+
+        # 3. Get AI response
+        chat_result = await hunyuan_service.chat(hunyuan_messages, temperature=0.7)
+        assistant_text = chat_result.get("content", "")
+
+        # 4. TTS: convert AI response to audio and encode as base64
+        audio_bytes = await tts_service.synthesize(
+            text=assistant_text,
+            voice_type=request.voice_type,
+            codec="mp3"
+        )
+        audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
+
+        return VoiceChatResponse(
+            success=True,
+            message="Chat completed successfully",
+            message_id=msg_id,
+            user_text=speech_text,
+            assistant_text=assistant_text,
+            audio_base64=audio_base64,
+            asr_data={
+                "text": speech_text,
+                "word_info_list": word_info_list
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        return VoiceChatResponse(
+            success=False,
+            message="Chat failed",
             message_id=msg_id,
             error=str(e)
         )

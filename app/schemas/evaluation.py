@@ -389,3 +389,101 @@ class StoryReadingResponse(BaseModel):
     )
 
     error: Optional[str] = Field(None, description="错误信息")
+
+
+class TongueTwisterReadingRequest(BaseModel):
+    """Request model for tongue twister speech evaluation."""
+
+    audio_url: HttpUrl = Field(..., description="绕口令音频文件URL")
+    tongue_twister_text: str = Field(
+        ..., description="绕口令原文文本", min_length=2, max_length=5000
+    )
+    message_id: Optional[str] = Field(None, description="消息ID，不传则自动生成UUID")
+
+
+class TongueTwisterReadingResponse(BaseModel):
+    """Response model for tongue twister speech evaluation."""
+
+    success: bool = Field(..., description="是否成功")
+    message: str = Field(..., description="状态消息")
+    message_id: str = Field(..., description="消息ID")
+
+    # SOE评分数据
+    speech_scores: Optional[SpeechScores] = Field(
+        None, description="语音评测评分（准确度、流利度、完整度等）"
+    )
+    statistics: Optional[EvaluationStatistics] = Field(
+        None, description="评测统计数据"
+    )
+
+    # AI分析结果
+    strengths: List[str] = Field(
+        default_factory=list, description="优势列表"
+    )
+    improvements: Optional[dict] = Field(
+        None,
+        description="待提升分析，包含extra_words(多读)、missed_words(漏读)、pronunciation_issues(发音问题)"
+    )
+    fluency_analysis: Optional[dict] = Field(
+        None, description="流畅度分析（基于时间戳数据）"
+    )
+    overall_assessment: Optional[str] = Field(
+        None, description="总体评价"
+    )
+    practice_suggestions: List[str] = Field(
+        default_factory=list, description="练习建议列表"
+    )
+
+    # ASR原始数据
+    asr_data: Optional[dict] = Field(
+        None, description="ASR识别结果（含时间戳），包含text和word_info_list"
+    )
+
+    error: Optional[str] = Field(None, description="错误信息")
+
+
+class ChatMessage(BaseModel):
+    """Single message in a conversation."""
+
+    role: str = Field(..., description="消息角色：system / user / assistant")
+    content: str = Field(..., description="消息内容")
+
+
+class VoiceChatRequest(BaseModel):
+    """Request model for voice chat conversation."""
+
+    audio_url: HttpUrl = Field(..., description="用户语音文件URL")
+    messages: Optional[List[ChatMessage]] = Field(
+        None, description="对话历史（不含本次语音），按时间顺序排列"
+    )
+    system_prompt: Optional[str] = Field(
+        None, description="自定义系统提示词，优先级高于scene预设场景"
+    )
+    scene: Optional[str] = Field(
+        None,
+        description="预设场景类型：interview(面试)、daily(日常对话)、customer_service(客服)"
+    )
+    voice_type: int = Field(
+        default=101001,
+        description="TTS音色ID：101001(智瑜-女)、101005(智华-男)、101050(英文女)、101051(英文男)"
+    )
+    message_id: Optional[str] = Field(None, description="消息ID，不传则自动生成UUID")
+
+
+class VoiceChatResponse(BaseModel):
+    """Response model for voice chat conversation."""
+
+    success: bool = Field(..., description="是否成功")
+    message: str = Field(..., description="状态消息")
+    message_id: str = Field(..., description="消息ID")
+
+    user_text: Optional[str] = Field(None, description="ASR识别的用户语音文本")
+    assistant_text: Optional[str] = Field(None, description="AI回复文本")
+    audio_base64: Optional[str] = Field(None, description="AI回复的TTS音频Base64编码(mp3格式)")
+
+    # ASR原始数据
+    asr_data: Optional[dict] = Field(
+        None, description="ASR识别结果（含时间戳），包含text和word_info_list"
+    )
+
+    error: Optional[str] = Field(None, description="错误信息")

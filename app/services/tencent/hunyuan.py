@@ -822,7 +822,7 @@ class HunyuanService(TencentCloudClient):
 5. 逻辑与结构（组织结构、连贯性、论证逻辑）
 6. 表达与用词（用词水平、表达风格、亮点）
 7. 优点
-8. 改进意见
+8. 改进意见（如果涉及发音问题，请列出准确度低于60分的低分字词作为具体示例）
 9. 低分段落分析
 
 严格按照系统提示的JSON格式输出。"""
@@ -1230,6 +1230,14 @@ Note:
     },
     "fluency_analysis": {
         "long_pauses_count": <长停顿(>3秒)次数>,
+        "long_pauses": [
+            {
+                "before_word": "<停顿前的词语>",
+                "after_word": "<停顿后的词语>",
+                "pause_duration_ms": <停顿时长毫秒>,
+                "position_time_ms": <停顿发生的时间点毫秒>
+            }
+        ],
         "repetition_count": <重复修正次数>,
         "filler_words_count": <填充词次数>,
         "sentence_completion_rate": <句子完整度0-100>,
@@ -1263,7 +1271,7 @@ Note:
 5. 待改进：给出具体可行的改进建议
 
 时间戳分析规则：
-- 长停顿：相邻词语间隔超过3000ms（3秒）
+- 长停顿：相邻词语间隔超过3000ms（3秒），需要记录每处长停顿的前后词语、停顿时长和发生时间点
 - 重复修正：相同或相似词语在短时间内重复出现
 - 填充词：如"啊"、"呃"、"那个"、"这个"、"嗯"等
 
@@ -1320,6 +1328,7 @@ Note:
                 },
                 "fluency_analysis": {
                     "long_pauses_count": 0,
+                    "long_pauses": [],
                     "repetition_count": 0,
                     "filler_words_count": 0,
                     "sentence_completion_rate": 0,
@@ -1331,6 +1340,190 @@ Note:
                     "overall_assessment": "无法解析AI响应"
                 },
                 "improvements": ["无法解析AI响应，请稍后重试"]
+            }
+
+    async def analyze_tongue_twister_reading(
+        self,
+        speech_text: str,
+        tongue_twister_text: str,
+        word_info_list: Optional[list] = None,
+        low_score_words: Optional[list] = None,
+        scores_data: Optional[dict] = None,
+        statistics_data: Optional[dict] = None,
+        audio_duration: Optional[float] = None,
+        language: str = "zh"
+    ) -> dict:
+        """
+        Analyze tongue twister reading performance.
+
+        Args:
+            speech_text: Transcribed speech text from ASR
+            tongue_twister_text: Original tongue twister text
+            word_info_list: Word-level timestamp data from ASR
+            low_score_words: Low score words from SOE evaluation
+            scores_data: SOE pronunciation scores
+            statistics_data: SOE evaluation statistics
+            audio_duration: Audio duration in seconds
+            language: Language code
+
+        Returns:
+            Analysis result with strengths, improvements, fluency analysis
+        """
+        scores_data = scores_data or {}
+        statistics_data = statistics_data or {}
+
+        # Build timestamp context
+        timestamp_info = ""
+        if word_info_list and len(word_info_list) > 0:
+            timestamp_info = "\n## 词级别时间戳信息\n\n| 词语 | 开始时间(ms) | 结束时间(ms) | 持续时长(ms) |\n|------|-------------|-------------|-------------|\n"
+            for w in word_info_list[:100]:
+                timestamp_info += f"| {w.get('word', '')} | {w.get('begin_time', 0)} | {w.get('end_time', 0)} | {w.get('duration', 0)} |\n"
+
+        if audio_duration:
+            timestamp_info += f"\n总音频时长: {audio_duration:.1f} 秒\n"
+
+        # Build low score words context
+        low_score_info = ""
+        if low_score_words and len(low_score_words) > 0:
+            low_score_info = "\n## 发音待改进的字词（SOE评测低分）\n\n| 字词 | 准确度 | 流利度 |\n|------|--------|--------|\n"
+            for word in low_score_words[:30]:
+                low_score_info += f"| {word.get('word', '')} | {word.get('accuracy', 0)} | {word.get('fluency', 0)} |\n"
+
+        system_prompt = """你是一个专业的绕口令语音评测专家。你的任务是分析用户朗读绕口令的语音表现，通过对比原始绕口令文本和实际朗读内容，评估优势和待改进之处。
+
+你必须严格按照以下JSON格式输出分析结果，不要添加任何额外内容，只输出JSON：
+
+{
+    "strengths": [
+        "<优势1：具体描述用户在发音、节奏、流畅度等方面的亮点，每条不少于15字>",
+        "<优势2>",
+        "<优势3>"
+    ],
+    "improvements": {
+        "extra_words": {
+            "count": <多读字词数量>,
+            "words": ["<多读的字词1>", "<多读的字词2>"],
+            "description": "<对多读情况的简要说明>"
+        },
+        "missed_words": {
+            "count": <漏读字词数量>,
+            "words": ["<漏读的字词1>", "<漏读的字词2>"],
+            "description": "<对漏读情况的简要说明>"
+        },
+        "pronunciation_issues": [
+            {
+                "word": "<发音有问题的字词>",
+                "accuracy_score": <SOE准确度评分>,
+                "issue_description": "<具体发音问题描述，如声母/韵母/声调问题>",
+                "correct_pronunciation": "<正确的发音要领>",
+                "practice_tip": "<针对性练习建议>"
+            }
+        ]
+    },
+    "fluency_analysis": {
+        "overall_fluency": "<整体流畅度评价：优秀/良好/一般/较差>",
+        "long_pauses": [
+            {
+                "before_word": "<停顿前的词语>",
+                "after_word": "<停顿后的词语>",
+                "pause_duration_ms": <停顿时长毫秒>,
+                "suggestion": "<针对该停顿的建议>"
+            }
+        ],
+        "rhythm_assessment": "<节奏评价：绕口令的节奏感是否把握得当>",
+        "speed_assessment": "<语速评价：是否适合该绕口令的难度>"
+    },
+    "overall_assessment": "<综合评价，50-100字，概括整体朗读表现>",
+    "practice_suggestions": [
+        "<练习建议1：具体可操作的改进方法>",
+        "<练习建议2>",
+        "<练习建议3>"
+    ]
+}
+
+分析规则：
+1. 多读(extra_words)判断：将实际朗读文本与绕口令原文逐字对比，找出朗读中有但原文中没有的字词
+2. 漏读(missed_words)判断：找出原文中有但朗读中缺少的字词
+3. 发音问题(pronunciation_issues)：基于SOE评测的低分字词(accuracy<90分)，分析具体的发音问题
+4. 流畅度分析：基于词级时间戳，分析停顿（相邻词间隔>2000ms为长停顿）、节奏和语速
+5. 优势：要从完成度、发音准确性、流畅度、节奏感等多角度寻找亮点
+6. 练习建议：要针对具体问题给出可操作的练习方法
+
+注意：
+- 只输出纯JSON，不要添加markdown代码块标记
+- 多读和漏读的判断要精确，逐字对比
+- 发音问题要结合SOE低分数据，给出具体的声母/韵母/声调分析
+- 如果某项没有问题，保留字段但给出正面描述（如extra_words的count为0）
+- 绕口令的停顿标准比普通阅读更严格，使用2000ms作为长停顿阈值"""
+
+        user_prompt = f"""请分析以下用户朗读绕口令的表现：
+
+## 绕口令原文
+
+{tongue_twister_text}
+
+## 用户实际朗读内容（ASR识别结果）
+
+{speech_text}
+
+## SOE语音评测评分
+
+- 发音准确度: {scores_data.get('pronunciation_accuracy', 0)}分
+- 发音流利度: {scores_data.get('pronunciation_fluency', 0)}分
+- 发音完整度: {scores_data.get('pronunciation_completion', 0)}分
+- 综合建议分: {scores_data.get('suggested_score', 0)}分
+"""
+
+        if statistics_data:
+            user_prompt += f"""
+## 评分统计
+
+- 总字数: {statistics_data.get('total_words', 0)}
+- 平均准确度: {statistics_data.get('average_accuracy', 0):.1f}分
+- 低分字数: {statistics_data.get('low_score_count', 0)}个
+"""
+
+        user_prompt += low_score_info
+        user_prompt += timestamp_info
+
+        user_prompt += """
+请严格按照JSON格式输出分析结果。重点分析：
+1. 逐字对比原文和朗读内容，找出多读和漏读
+2. 结合SOE低分字词数据分析具体发音问题
+3. 基于时间戳分析流畅度和节奏
+4. 给出具体的优势和改进建议"""
+
+        messages = [
+            {"Role": "system", "Content": system_prompt},
+            {"Role": "user", "Content": user_prompt}
+        ]
+
+        result = await self.chat(messages, temperature=0.3)
+        content = result["content"]
+
+        # Parse JSON
+        try:
+            import re
+            json_match = re.search(r'\{[\s\S]*\}', content)
+            if json_match:
+                return json.loads(json_match.group())
+            return json.loads(content)
+        except json.JSONDecodeError:
+            return {
+                "strengths": [],
+                "improvements": {
+                    "extra_words": {"count": 0, "words": [], "description": "无法解析AI响应"},
+                    "missed_words": {"count": 0, "words": [], "description": "无法解析AI响应"},
+                    "pronunciation_issues": []
+                },
+                "fluency_analysis": {
+                    "overall_fluency": "无法解析",
+                    "long_pauses": [],
+                    "rhythm_assessment": "无法解析AI响应",
+                    "speed_assessment": "无法解析AI响应"
+                },
+                "overall_assessment": "无法解析AI响应，请稍后重试",
+                "practice_suggestions": []
             }
 
 
