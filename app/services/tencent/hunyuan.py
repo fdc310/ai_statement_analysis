@@ -1362,20 +1362,22 @@ Note:
         scores_data: Optional[dict] = None,
         statistics_data: Optional[dict] = None,
         audio_duration: Optional[float] = None,
-        language: str = "zh"
+        language: str = "zh",
+        eval_type: str = "tongue_twister"
     ) -> dict:
         """
-        Analyze tongue twister reading performance.
+        Analyze reading performance for tongue twisters or articles.
 
         Args:
             speech_text: Transcribed speech text from ASR
-            tongue_twister_text: Original tongue twister text
+            tongue_twister_text: Original reference text
             word_info_list: Word-level timestamp data from ASR
             low_score_words: Low score words from SOE evaluation
             scores_data: SOE pronunciation scores
             statistics_data: SOE evaluation statistics
             audio_duration: Audio duration in seconds
             language: Language code
+            eval_type: Evaluation type - "tongue_twister" or "article"
 
         Returns:
             Analysis result with strengths, improvements, fluency analysis
@@ -1400,7 +1402,49 @@ Note:
             for word in low_score_words[:30]:
                 low_score_info += f"| {word.get('word', '')} | {word.get('accuracy', 0)} | {word.get('fluency', 0)} |\n"
 
-        system_prompt = """你是一个专业的绕口令语音评测专家。你的任务是分析用户朗读绕口令的语音表现，通过对比原始绕口令文本和实际朗读内容，评估优势和待改进之处。
+        # Calculate speech rate
+        speech_rate_info = ""
+        if audio_duration and audio_duration > 0 and statistics_data.get('total_words', 0) > 0:
+            speech_rate = statistics_data['total_words'] / audio_duration * 60
+            speech_rate_info = f"\n语速: {speech_rate:.0f} 字/分钟\n"
+
+        # Select prompt based on eval_type
+        if eval_type == "article":
+            system_prompt = self._build_article_reading_system_prompt()
+            user_prompt = self._build_article_reading_user_prompt(
+                speech_text, tongue_twister_text, scores_data,
+                statistics_data, low_score_info, timestamp_info, speech_rate_info
+            )
+        else:
+            system_prompt = self._build_tongue_twister_system_prompt()
+            user_prompt = self._build_tongue_twister_user_prompt(
+                speech_text, tongue_twister_text, scores_data,
+                statistics_data, low_score_info, timestamp_info
+            )
+
+        messages = [
+            {"Role": "system", "Content": system_prompt},
+            {"Role": "user", "Content": user_prompt}
+        ]
+
+        result = await self.chat(messages, temperature=0.3)
+        content = result["content"]
+
+        # Parse JSON
+        try:
+            import re
+            json_match = re.search(r'\{[\s\S]*\}', content)
+            if json_match:
+                return json.loads(json_match.group())
+            return json.loads(content)
+        except json.JSONDecodeError:
+            if eval_type == "article":
+                return self._default_article_result()
+            return self._default_tongue_twister_result()
+
+    def _build_tongue_twister_system_prompt(self) -> str:
+        """构建绕口令评测的系统提示词"""
+        return """你是一个专业的绕口令语音评测专家。你的任务是分析用户朗读绕口令的语音表现，通过对比原始绕口令文本和实际朗读内容，评估优势和待改进之处。
 
 你必须严格按照以下JSON格式输出分析结果，不要添加任何额外内容，只输出JSON：
 
@@ -1467,11 +1511,16 @@ Note:
 - 如果某项没有问题，保留字段但给出正面描述（如extra_words的count为0）
 - 绕口令的停顿标准比普通阅读更严格，使用2000ms作为长停顿阈值"""
 
+    def _build_tongue_twister_user_prompt(
+        self, speech_text: str, ref_text: str, scores_data: dict,
+        statistics_data: dict, low_score_info: str, timestamp_info: str
+    ) -> str:
+        """构建绕口令评测的用户提示词"""
         user_prompt = f"""请分析以下用户朗读绕口令的表现：
 
 ## 绕口令原文
 
-{tongue_twister_text}
+{ref_text}
 
 ## 用户实际朗读内容（ASR识别结果）
 
@@ -1503,39 +1552,243 @@ Note:
 2. 结合SOE低分字词数据分析具体发音问题
 3. 基于时间戳分析流畅度和节奏
 4. 给出具体的优势和改进建议"""
+        return user_prompt
 
-        messages = [
-            {"Role": "system", "Content": system_prompt},
-            {"Role": "user", "Content": user_prompt}
-        ]
+    def _build_article_reading_system_prompt(self) -> str:
+        """构建文章朗读评测的系统提示词"""
+        return """你是一个专业的文章朗读评测专家。你的任务是分析用户朗读文章的语音表现，从流畅度、语速、断句停顿、读错漏字等多个维度进行评估。
 
-        result = await self.chat(messages, temperature=0.3)
-        content = result["content"]
+你必须严格按照以下JSON格式输出分析结果，不要添加任何额外内容，只输出JSON：
 
-        # Parse JSON
-        try:
-            import re
-            json_match = re.search(r'\{[\s\S]*\}', content)
-            if json_match:
-                return json.loads(json_match.group())
-            return json.loads(content)
-        except json.JSONDecodeError:
-            return {
-                "strengths": [],
-                "improvements": {
-                    "extra_words": {"count": 0, "words": [], "description": "无法解析AI响应"},
-                    "missed_words": {"count": 0, "words": [], "description": "无法解析AI响应"},
-                    "pronunciation_issues": []
-                },
-                "fluency_analysis": {
-                    "overall_fluency": "无法解析",
-                    "long_pauses": [],
-                    "rhythm_assessment": "无法解析AI响应",
-                    "speed_assessment": "无法解析AI响应"
-                },
-                "overall_assessment": "无法解析AI响应，请稍后重试",
-                "practice_suggestions": []
+{
+    "strengths": [
+        "<优势1：具体描述用户在朗读中的亮点，每条不少于15字>",
+        "<优势2>",
+        "<优势3>"
+    ],
+    "improvements": {
+        "extra_words": {
+            "count": <多读字词数量>,
+            "words": ["<多读的字词1>", "<多读的字词2>"],
+            "description": "<对多读情况的简要说明>"
+        },
+        "missed_words": {
+            "count": <漏读字词数量>,
+            "words": ["<漏读的字词1>", "<漏读的字词2>"],
+            "description": "<对漏读情况的简要说明>"
+        },
+        "wrong_words": [
+            {
+                "original": "<原文字词>",
+                "actual": "<实际读成的字词>",
+                "position": "<大致位置描述，如第几段第几句>"
             }
+        ],
+        "pronunciation_issues": [
+            {
+                "word": "<发音有问题的字词>",
+                "accuracy_score": <SOE准确度评分>,
+                "issue_description": "<具体发音问题描述>",
+                "correct_pronunciation": "<正确的发音要领>",
+                "practice_tip": "<针对性练习建议>"
+            }
+        ]
+    },
+    "fluency_analysis": {
+        "score": <流畅度评分0-100>,
+        "overall_fluency": "<整体流畅度评价：优秀/良好/一般/较差>",
+        "interruptions": [
+            {
+                "position": "<中断发生的位置描述，如第几段>",
+                "before_word": "<中断前的词语>",
+                "after_word": "<中断后的词语>",
+                "pause_duration_ms": <停顿时长毫秒>,
+                "type": "<类型：异常停顿/重复读/卡壳>"
+            }
+        ],
+        "repeated_reads": [
+            {
+                "word": "<被重复读的词语或句段>",
+                "position": "<位置描述>",
+                "count": <重复次数>
+            }
+        ],
+        "stutters": [
+            "<明显卡壳的位置和内容描述>"
+        ]
+    },
+    "speech_rate_analysis": {
+        "overall_rate": <整体语速，字/分钟>,
+        "rate_level": "<偏快/适中/偏慢>",
+        "standard_range": "180-240字/分钟",
+        "segment_rates": [
+            {
+                "segment": "<段落描述，如第一段>",
+                "rate": <该段语速>,
+                "assessment": "<该段语速评价>"
+            }
+        ],
+        "fast_segments": ["<局部语速过快的位置描述>"],
+        "slow_segments": ["<局部语速过慢的位置描述>"],
+        "suggestion": "<语速改进建议>"
+    },
+    "pause_analysis": {
+        "proper_pauses": <在标点/语义边界处正确停顿的次数>,
+        "improper_pauses": [
+            {
+                "before_word": "<停顿前的词语>",
+                "after_word": "<停顿后的词语>",
+                "context": "<该停顿所在的句子>",
+                "issue": "<问题描述，如：停顿打断了语义结构>"
+            }
+        ],
+        "missed_pauses": [
+            {
+                "position": "<应该停顿但没有停顿的位置>",
+                "context": "<所在句子>",
+                "suggestion": "<建议>"
+            }
+        ],
+        "overall_assessment": "<整体断句停顿评价>"
+    },
+    "overall_assessment": "<综合评价，80-150字，概括整体朗读表现>",
+    "practice_suggestions": [
+        "<练习建议1：具体可操作的改进方法>",
+        "<练习建议2>",
+        "<练习建议3>"
+    ]
+}
+
+分析规则：
+1. 流畅度分析：
+   - 异常停顿：相邻词间隔>1500ms（非标点处）判定为异常停顿
+   - 重复读：相同或相似词语在短时间内重复出现
+   - 卡壳：在非停顿位置出现明显的犹豫或断续
+   - 流畅度评分标准：无明显中断(90-100分)，偶有停顿不影响理解(70-89分)，多处中断影响流畅度(50-69分)，严重卡顿(0-49分)
+
+2. 语速分析：
+   - 标准朗读语速区间：140-240字/分钟
+   - 根据时间戳按段落计算局部语速
+   - 检测局部语速过快(>280字/分钟)或过慢(<120字/分钟)的段落
+
+3. 断句与停顿：
+   - 以原文标点和语义边界为基准
+   - 判断用户停顿是否出现在正确位置（标点处、语义边界处）
+   - 如果停顿打断了语义结构，明确指出问题
+
+4. 读错/漏字/加字：
+   - 对比原文和ASR转写文本，逐字对比
+   - 识别漏读、误读（读错字）、多读（加字）
+
+5. 发音问题：基于SOE低分字词数据分析具体发音问题
+
+注意：
+- 只输出纯JSON，不要添加markdown代码块标记
+- 流畅度的中断要精确定位到具体位置
+- 语速分析要区分整体和局部
+- 断句分析要结合原文标点判断停顿合理性
+- 如果某项没有问题，保留字段但给出正面描述"""
+
+    def _build_article_reading_user_prompt(
+        self, speech_text: str, ref_text: str, scores_data: dict,
+        statistics_data: dict, low_score_info: str, timestamp_info: str,
+        speech_rate_info: str
+    ) -> str:
+        """构建文章朗读评测的用户提示词"""
+        user_prompt = f"""请分析以下用户朗读文章的表现：
+
+## 文章原文
+
+{ref_text}
+
+## 用户实际朗读内容（ASR识别结果）
+
+{speech_text}
+
+## SOE语音评测评分
+
+- 发音准确度: {scores_data.get('pronunciation_accuracy', 0)}分
+- 发音流利度: {scores_data.get('pronunciation_fluency', 0)}分
+- 发音完整度: {scores_data.get('pronunciation_completion', 0)}分
+- 综合建议分: {scores_data.get('suggested_score', 0)}分
+{speech_rate_info}"""
+
+        if statistics_data:
+            user_prompt += f"""
+## 评分统计
+
+- 总字数: {statistics_data.get('total_words', 0)}
+- 平均准确度: {statistics_data.get('average_accuracy', 0):.1f}分
+- 低分字数: {statistics_data.get('low_score_count', 0)}个
+"""
+
+        user_prompt += low_score_info
+        user_prompt += timestamp_info
+
+        user_prompt += """
+请严格按照JSON格式输出分析结果。重点分析：
+1. 流畅度：识别异常停顿、重复读、卡壳的位置，给出流畅度评分
+2. 语速：计算整体和分段语速，与标准区间(180-240字/分钟)对比
+3. 断句停顿：判断停顿是否在标点/语义边界处，指出打断语义的不当停顿
+4. 逐字对比原文和朗读内容，找出多读、漏读和读错的字词
+5. 结合SOE低分数据分析具体发音问题
+6. 给出具体的优势和改进建议"""
+        return user_prompt
+
+    def _default_tongue_twister_result(self) -> dict:
+        """绕口令评测的默认返回结构"""
+        return {
+            "strengths": [],
+            "improvements": {
+                "extra_words": {"count": 0, "words": [], "description": "无法解析AI响应"},
+                "missed_words": {"count": 0, "words": [], "description": "无法解析AI响应"},
+                "pronunciation_issues": []
+            },
+            "fluency_analysis": {
+                "overall_fluency": "无法解析",
+                "long_pauses": [],
+                "rhythm_assessment": "无法解析AI响应",
+                "speed_assessment": "无法解析AI响应"
+            },
+            "overall_assessment": "无法解析AI响应，请稍后重试",
+            "practice_suggestions": []
+        }
+
+    def _default_article_result(self) -> dict:
+        """文章朗读评测的默认返回结构"""
+        return {
+            "strengths": [],
+            "improvements": {
+                "extra_words": {"count": 0, "words": [], "description": "无法解析AI响应"},
+                "missed_words": {"count": 0, "words": [], "description": "无法解析AI响应"},
+                "wrong_words": [],
+                "pronunciation_issues": []
+            },
+            "fluency_analysis": {
+                "score": 0,
+                "overall_fluency": "无法解析",
+                "interruptions": [],
+                "repeated_reads": [],
+                "stutters": []
+            },
+            "speech_rate_analysis": {
+                "overall_rate": 0,
+                "rate_level": "无法解析",
+                "standard_range": "180-240字/分钟",
+                "segment_rates": [],
+                "fast_segments": [],
+                "slow_segments": [],
+                "suggestion": "无法解析AI响应"
+            },
+            "pause_analysis": {
+                "proper_pauses": 0,
+                "improper_pauses": [],
+                "missed_pauses": [],
+                "overall_assessment": "无法解析AI响应"
+            },
+            "overall_assessment": "无法解析AI响应，请稍后重试",
+            "practice_suggestions": []
+        }
 
 
 # Singleton instance

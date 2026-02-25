@@ -1667,7 +1667,7 @@ async def evaluate_tongue_twister_reading(
                 audio_data,
                 ref_text=request.tongue_twister_text,
                 eval_mode=1,
-                score_coeff=1.0,
+                score_coeff=request.score_coeff,
                 server_type=0
             )
         )
@@ -1680,6 +1680,8 @@ async def evaluate_tongue_twister_reading(
         scores_data = soe_result.get("scores", {})
         low_score_words_data = soe_result.get("low_score_words", [])
         statistics_data = soe_result.get("statistics", {})
+        soe_words_data = soe_result.get("words", [])
+        soe_sentences_data = soe_result.get("sentences", [])
 
         # Calculate audio duration from timestamps
         audio_duration = None
@@ -1711,7 +1713,8 @@ async def evaluate_tongue_twister_reading(
             scores_data=scores_data,
             statistics_data=statistics_data,
             audio_duration=audio_duration,
-            language="zh"
+            language="zh",
+            eval_type=request.eval_type
         )
 
         return TongueTwisterReadingResponse(
@@ -1720,6 +1723,10 @@ async def evaluate_tongue_twister_reading(
             message_id=msg_id,
             speech_scores=speech_scores,
             statistics=statistics,
+            soe_words=soe_words_data,
+            low_score_words=low_score_words_data,
+            soe_sentences=soe_sentences_data,
+            soe_data=soe_result,
             strengths=analysis_result.get("strengths", []),
             improvements=analysis_result.get("improvements"),
             fluency_analysis=analysis_result.get("fluency_analysis"),

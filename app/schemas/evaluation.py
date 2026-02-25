@@ -392,11 +392,21 @@ class StoryReadingResponse(BaseModel):
 
 
 class TongueTwisterReadingRequest(BaseModel):
-    """Request model for tongue twister speech evaluation."""
+    """Request model for tongue twister / article speech evaluation."""
 
-    audio_url: HttpUrl = Field(..., description="绕口令音频文件URL")
+    audio_url: HttpUrl = Field(..., description="音频文件URL")
     tongue_twister_text: str = Field(
-        ..., description="绕口令原文文本", min_length=2, max_length=5000
+        ..., description="原文文本（绕口令或文章）", min_length=2, max_length=5000
+    )
+    eval_type: str = Field(
+        default="tongue_twister",
+        description="评测类型：tongue_twister(绕口令，默认)、article(文章朗读)"
+    )
+    score_coeff: float = Field(
+        default=1.0,
+        ge=1.0,
+        le=4.0,
+        description="SOE评分苛刻指数：1.0(儿童/宽松) 2.0(标准) 4.0(成人/严格)"
     )
     message_id: Optional[str] = Field(None, description="消息ID，不传则自动生成UUID")
 
@@ -408,12 +418,24 @@ class TongueTwisterReadingResponse(BaseModel):
     message: str = Field(..., description="状态消息")
     message_id: str = Field(..., description="消息ID")
 
-    # SOE评分数据
+    # SOE完整评分数据
     speech_scores: Optional[SpeechScores] = Field(
         None, description="语音评测评分（准确度、流利度、完整度等）"
     )
     statistics: Optional[EvaluationStatistics] = Field(
         None, description="评测统计数据"
+    )
+    soe_words: Optional[List[dict]] = Field(
+        None, description="SOE逐字评分详情（每个字的准确度、流利度、音素信息）"
+    )
+    low_score_words: Optional[List[dict]] = Field(
+        None, description="低分字词列表（准确度<90分）"
+    )
+    soe_sentences: Optional[List[dict]] = Field(
+        None, description="SOE句子级评分详情"
+    )
+    soe_data: Optional[dict] = Field(
+        None, description="SOE完整原始评测数据"
     )
 
     # AI分析结果
@@ -434,7 +456,7 @@ class TongueTwisterReadingResponse(BaseModel):
         default_factory=list, description="练习建议列表"
     )
 
-    # ASR原始数据
+    # ASR完整数据
     asr_data: Optional[dict] = Field(
         None, description="ASR识别结果（含时间戳），包含text和word_info_list"
     )
