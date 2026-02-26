@@ -1611,22 +1611,19 @@ async def evaluate_tongue_twister_reading(
     x_signature: Optional[str] = Header(None, alias="X-Signature")
 ) -> TongueTwisterReadingResponse:
     """
-    绕口令语音评测接口 - 分析用户朗读绕口令的语音表现。
+    绕口令/文章朗读评测接口 - 分析用户朗读的语音表现。
 
     本接口通过ASR识别音频内容（带时间戳），结合SOE发音评分，
-    再由混元AI综合分析优势和待提升之处：
-    - 优势：发音准确性、流畅度、节奏感等方面的亮点
-    - 待提升-多读：朗读中多出原文没有的字词
-    - 待提升-漏读：原文中有但朗读中遗漏的字词
-    - 待提升-发音问题：结合SOE低分字词分析具体发音问题
-    - 流畅度分析：基于时间戳分析长停顿、节奏和语速
-    - 练习建议：针对具体问题给出可操作的练习方法
+    再由混元AI综合分析优势和待提升之处。
 
-    **功能特性**:
-    - ASR带时间戳识别（WordInfo=1）
-    - SOE发音评测（句子模式，对齐原文评分）
-    - ASR与SOE并行执行提升性能
-    - 混元AI综合分析优势和待提升
+    支持两种评测类型：
+    - **tongue_twister**（默认）：绕口令评测，侧重发音准确性、节奏感
+    - **article**：文章朗读评测，侧重流畅度评分、语速分析、断句停顿、读错字
+
+    **处理流程**:
+    1. 下载音频文件
+    2. ASR语音识别（带时间戳）与 SOE发音评测 并行执行
+    3. 混元AI根据评测类型综合分析
 
     **Headers**:
     - X-Signature: AES加密签名（必填）
@@ -1634,18 +1631,39 @@ async def evaluate_tongue_twister_reading(
     **Request body**:
     ```json
     {
-        "audio_url": "https://example.com/tongue-twister.mp3",
+        "audio_url": "https://example.com/audio.mp3",
         "tongue_twister_text": "八百标兵奔北坡，炮兵并排北边跑",
+        "eval_type": "tongue_twister",
+        "score_coeff": 1.0,
         "message_id": "可选的消息ID"
     }
     ```
 
     **参数说明**:
-    | 参数名 | 类型 | 必填 | 说明 |
-    |--------|------|------|------|
-    | audio_url | string | 是 | 绕口令音频文件URL |
-    | tongue_twister_text | string | 是 | 绕口令原文文本 |
-    | message_id | string | 否 | 消息ID，不传则自动生成UUID |
+    | 参数名 | 类型 | 必填 | 默认值 | 说明 |
+    |--------|------|------|--------|------|
+    | audio_url | string | 是 | - | 音频文件URL |
+    | tongue_twister_text | string | 是 | - | 原文文本（绕口令或文章） |
+    | eval_type | string | 否 | tongue_twister | 评测类型：tongue_twister / article |
+    | score_coeff | float | 否 | 1.0 | SOE评分苛刻指数：1.0(宽松) 2.0(标准) 4.0(严格) |
+    | message_id | string | 否 | 自动生成 | 消息ID |
+
+    **Response 主要字段**:
+    | 字段 | 说明 |
+    |------|------|
+    | speech_scores | SOE评分（准确度、流利度、完整度） |
+    | statistics | 评测统计（总字数、平均准确度、低分字数） |
+    | soe_words | SOE逐字评分详情 |
+    | low_score_words | 低分字词列表（准确度<90分） |
+    | soe_sentences | SOE句子级评分 |
+    | soe_data | SOE完整原始数据 |
+    | strengths | AI分析的优势列表 |
+    | improvements | 待提升（多读/漏读/发音问题，article模式额外含读错字） |
+    | fluency_analysis | 流畅度分析（article模式含评分、中断、重复读、卡壳） |
+    | speech_rate_analysis | 语速分析（仅article模式，含分段语速） |
+    | pause_analysis | 断句停顿分析（仅article模式） |
+    | practice_suggestions | 练习建议 |
+    | asr_data | ASR完整数据（text + word_info_list时间戳） |
     """
     verify_signature(x_signature)
 
@@ -1770,11 +1788,20 @@ async def voice_chat(
     接收用户语音URL，ASR转文字（带时间戳），发送给AI对话，
     再将AI回复通过TTS转为语音，返回AI文本 + 音频Base64数据。
 
-    **功能特性**:
-    - ASR带时间戳识别（WordInfo=1）
-    - 支持多轮对话（客户端传递历史messages）
-    - 支持预设场景（interview/daily/customer_service）和自定义system_prompt
-    - AI回复通过TTS转语音，返回Base64编码的mp3音频
+    **处理流程**:
+    1. 下载音频 → ASR语音识别（带时间戳）
+    2. 构建对话消息（system_prompt + 历史messages + 本次用户文本）
+    3. 混元AI生成回复
+    4. TTS将回复转为语音 → Base64编码
+
+    **场景设定优先级**: 自定义system_prompt > 预设scene > 默认通用对话
+
+    **预设场景**:
+    | scene | 说明 |
+    |-------|------|
+    | interview | 面试官角色，追问评价 |
+    | daily | 日常对话伙伴，口语化交流 |
+    | customer_service | 客服人员，处理咨询 |
 
     **Headers**:
     - X-Signature: AES加密签名（必填）
@@ -1795,14 +1822,38 @@ async def voice_chat(
     ```
 
     **参数说明**:
-    | 参数名 | 类型 | 必填 | 说明 |
-    |--------|------|------|------|
-    | audio_url | string | 是 | 用户语音文件URL |
-    | messages | array | 否 | 对话历史（不含本次语音） |
-    | system_prompt | string | 否 | 自定义系统提示词，优先级高于scene |
-    | scene | string | 否 | 预设场景：interview/daily/customer_service |
-    | voice_type | int | 否 | TTS音色ID，默认101001(智瑜-女) |
-    | message_id | string | 否 | 消息ID，不传则自动生成UUID |
+    | 参数名 | 类型 | 必填 | 默认值 | 说明 |
+    |--------|------|------|--------|------|
+    | audio_url | string | 是 | - | 用户语音文件URL |
+    | messages | array | 否 | null | 对话历史（不含本次语音） |
+    | system_prompt | string | 否 | null | 自定义系统提示词，优先级高于scene |
+    | scene | string | 否 | null | 预设场景：interview/daily/customer_service |
+    | voice_type | int | 否 | 101001 | TTS音色：101001(智瑜-女) 101005(智华-男) |
+    | message_id | string | 否 | 自动生成 | 消息ID |
+
+    **Response 示例**:
+    ```json
+    {
+        "success": true,
+        "message": "Chat completed successfully",
+        "message_id": "uuid",
+        "user_text": "我叫张三，做了三年后端开发",
+        "assistant_text": "好的张三，请问你最擅长哪些技术栈？",
+        "audio_base64": "SUQzBAAAAAAAI1RTU0UAAAA...(base64编码的mp3音频)",
+        "asr_data": {
+            "text": "我叫张三，做了三年后端开发",
+            "word_info_list": [
+                {"word": "我", "begin_time": 0, "end_time": 200, "duration": 200}
+            ]
+        },
+        "error": null
+    }
+    ```
+
+    **多轮对话使用说明**:
+    - 首轮：messages传null或不传
+    - 后续轮：将之前的user_text和assistant_text拼入messages数组
+    - audio_url始终传当前轮的用户语音
     """
     verify_signature(x_signature)
 
