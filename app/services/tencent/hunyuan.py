@@ -2198,3 +2198,51 @@ SOE原始分(pronunciation_accuracy/fluency/completion/suggested_score)直接填
 
 # Singleton instance
 hunyuan_service = HunyuanService()
+
+async def analyze_impromptu_reaction(
+    text: str,
+    scenario: str,
+    word_info_list: list = None
+) -> dict:
+    """
+    即兴反应专项分析 (Impromptu Reaction Analysis)
+    结合语音转写文本、情境/题目、以及带时间戳的词信息。
+    """
+    prompt = f"""
+你是一名资深演讲与沟通教练。请根据以下即兴反应场景和用户的语音转写内容，给出一份专业的“即兴反应评测报告”。
+
+**触发情境/题目**：{scenario}
+**用户发言转写**：{text}
+
+请参考以下语音词汇及时间戳信息（用于判断反应速度、填充词和语速突变等，可选参考）：
+{str(word_info_list)[:1500] if word_info_list else '（无词级别时间戳信息）'}
+
+你需要从以下几个核心维度进行客观且犀利的评估：
+
+1. **起步反应速度与情绪**：
+   - 是否出现大量“嗯”“啊”等无意义填充词？是否明显慌乱？
+   - 分析开口是否果断，语速是否突然加快以掩饰紧张。
+
+2. **结构形成速度**：
+   - 是否在前 15 秒内迅速形成主线？（例如：“我会从两个方面说……”等明确的结构信号）。
+   - 如果没有，结构是从何时开始清晰的，或者是否全程混乱。
+
+3. **逻辑连贯度与切题度**：
+   - 思维是否跳跃？是否有话题中断或偏题的情况？
+   - 是否紧扣给定的“触发情境/题目”？
+
+4. **冗余度与表达流畅度**：
+   - 统计或评估口头禅、填充词（如“然后”、“就是说”）的出现频率和比例。
+
+最后，请输出一份结构化的点评报告，必须严格遵循以下 JSON 格式返回，不要包含 Markdown 格式块（如 ```json ）或其他多余文本：
+
+{{
+  "summary": "【一句话总结】你的核心表现，例如：你成功连接了三个关键词，但主线略显松散。",
+  "reaction_speed": "【起步与情绪】分析反应速度和情绪稳定度，是否有明显慌乱或大量嗯啊。",
+  "structure_performance": "【结构表现】例如：有开头主线，但中段偏散。",
+  "logical_coherence": "【逻辑连贯度】分析是否跳跃、话题中断或严重偏题。",
+  "expression_fluency": "【表达流畅度】例如：出现5次填充词，语速在中间段突然加快。",
+  "next_action": "【下一次只改一件事】给出唯一且最具操作性的改进建议，例如：在开头先说清主线。"
+}}
+"""
+    return await generate_json(prompt)
