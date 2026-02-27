@@ -509,3 +509,39 @@ class VoiceChatResponse(BaseModel):
     )
 
     error: Optional[str] = Field(None, description="错误信息")
+
+
+class OpinionStatementRequest(BaseModel):
+    """Request model for one-minute opinion statement evaluation."""
+
+    audio_url: HttpUrl = Field(..., description="音频文件URL")
+    ref_text: Optional[str] = Field(None, description="参考文本，用于SOE评测对照（不传则SOE使用自由说模式）")
+    topic: Optional[str] = Field(None, description="观点陈述的题目/话题，用于分析贴题性")
+    score_coeff: float = Field(
+        default=1.0,
+        ge=1.0,
+        le=4.0,
+        description="SOE评分苛刻指数：1.0(宽松) 2.0(标准) 4.0(严格)"
+    )
+    language: str = Field(default="zh", description="语言：'zh'中文，'en'英文")
+    message_id: Optional[str] = Field(None, description="消息ID，不传则自动生成UUID")
+
+
+class OpinionStatementResponse(BaseModel):
+    """Response model for one-minute opinion statement evaluation."""
+
+    success: bool = Field(..., description="是否成功")
+    message: str = Field(..., description="状态消息")
+    message_id: str = Field(..., description="消息ID")
+    audio_url: str = Field(..., description="音频URL")
+    speech_text: Optional[str] = Field(None, description="语音转写文本（ASR识别结果）")
+    speech_rate: Optional[float] = Field(None, description="语速（字/分钟或词/分钟）")
+
+    # SOE评分数据
+    speech_scores: Optional[SpeechScores] = Field(None, description="语音评测评分")
+    statistics: Optional[EvaluationStatistics] = Field(None, description="评测统计数据")
+    low_score_words: Optional[List[WordScore]] = Field(None, description="低分字词列表")
+
+    # AI评测报告
+    evaluation_report: Optional[dict] = Field(None, description="AI生成的观点陈述评测报告（JSON格式）")
+    error: Optional[str] = Field(None, description="错误信息")

@@ -42,7 +42,9 @@ from app.schemas.evaluation import (
     TongueTwisterReadingRequest,
     TongueTwisterReadingResponse,
     VoiceChatRequest,
-    VoiceChatResponse
+    VoiceChatResponse,
+    OpinionStatementRequest,
+    OpinionStatementResponse
 )
 from app.services.tencent import asr_service, soe_service, hunyuan_service, tts_service
 
@@ -1926,5 +1928,151 @@ async def voice_chat(
             success=False,
             message="Chat failed",
             message_id=msg_id,
+            error=str(e)
+        )
+
+
+@router.post("/opinion-statement", response_model=OpinionStatementResponse)
+async def generate_opinion_statement_report(
+    request: OpinionStatementRequest,
+    x_signature: Optional[str] = Header(None, alias="X-Signature")
+) -> OpinionStatementResponse:
+    """
+    一分钟观点陈述评测（同步接口）。
+
+    传入音频URL，接口自动进行ASR语音识别和SOE发音评测，
+    再由混元AI针对"一分钟观点陈述"场景生成专项评测报告。
+
+    **处理流程**:
+    1. 下载音频文件
+    2. ASR语音识别（带时间戳）与 SOE发音评测 并行执行
+    3. 混元AI综合分析观点陈述表现
+
+    **评测维度**:
+    - 观点明确性（25%）：是否开门见山、观点是否鲜明，识别回避式开头
+    - 结构完整度（20%）：观点→理由→举例→总结 四要素是否完整
+    - 逻辑清晰度（25%）：是否存在逻辑跳跃、矛盾、论据堆砌
+    - 时间节奏（15%）：时长是否合适、前后半段语速变化、是否慌张加速
+    - 表达精炼度（15%）：口头禅频率、废话比例、有效内容占比
+
+    **请求参数**:
+    | 参数 | 类型 | 必填 | 说明 |
+    |------|------|------|------|
+    | audio_url | string | 是 | 音频文件URL |
+    | ref_text | string | 否 | 参考文本，用于SOE评测对照（不传则自由说模式） |
+    | topic | string | 否 | 陈述题目/话题，用于分析贴题性 |
+    | score_coeff | float | 否 | SOE评分苛刻指数：1.0(宽松)-4.0(严格)，默认1.0 |
+    | language | string | 否 | 语言，默认zh |
+    | message_id | string | 否 | 消息ID |
+
+    **Headers**:
+    - X-Signature: AES加密签名（必填）
+    """
+    # Verify signature from header
+    verify_signature(x_signature)
+
+    # Generate message_id if not provided
+    msg_id = request.message_id or str(uuid.uuid4())
+    audio_url = str(request.audio_url)
+
+    try:
+        # 1. Download audio
+        audio_data = await asr_service.download_audio(audio_url)
+
+        # 2. Run ASR (with timestamps) and SOE in parallel
+        engine_type = "16k_zh" if request.language == "zh" else "16k_en"
+        soe_ref_text = request.ref_text or ""
+
+        asr_result, soe_result = await asyncio.gather(
+            asr_service.recognize_audio(
+                audio_data,
+                engine_type=engine_type,
+                word_info=1
+            ),
+            soe_service.evaluate_audio(
+                audio_data,
+                ref_text=soe_ref_text,
+                eval_mode=1,
+                score_coeff=request.score_coeff,
+                server_type=0
+            )
+        )
+
+        # 3. Extract ASR results
+        speech_text = asr_result.get("text", "")
+        word_info_list = asr_result.get("word_info_list", [])
+
+        # 4. Extract SOE results
+        scores_data = soe_result.get("scores", {})
+        low_score_words_data = soe_result.get("low_score_words", [])
+        statistics_data = soe_result.get("statistics", {})
+
+        # Build typed score objects for response
+        speech_scores = SpeechScores(
+            pronunciation_accuracy=scores_data.get("pronunciation_accuracy", 0),
+            pronunciation_fluency=scores_data.get("pronunciation_fluency", 0),
+            pronunciation_completion=scores_data.get("pronunciation_completion", 0),
+            suggested_score=scores_data.get("suggested_score", 0),
+            overall_score=scores_data.get("overall_score", 0)
+        )
+
+        statistics = EvaluationStatistics(
+            total_words=statistics_data.get("total_words", 0),
+            average_accuracy=statistics_data.get("average_accuracy", 0),
+            low_score_count=statistics_data.get("low_score_count", 0)
+        )
+
+        # 5. Calculate audio duration and speech rate from timestamps
+        audio_duration = None
+        speech_rate = None
+        if word_info_list:
+            last_word = word_info_list[-1]
+            audio_duration = last_word.get("end_time", 0) / 1000
+
+        if audio_duration and audio_duration > 0 and speech_text:
+            if request.language == "zh":
+                punctuation = string.punctuation + '。，！？、；：""''（）【】《》…—'
+                char_count = len([c for c in speech_text if c not in punctuation and not c.isspace()])
+            else:
+                char_count = len(speech_text.split())
+            speech_rate = round(char_count / (audio_duration / 60), 1)
+
+        # 6. Generate opinion statement report via Hunyuan
+        evaluation_report = await hunyuan_service.generate_opinion_statement_report(
+            speech_text=speech_text,
+            speech_scores=scores_data,
+            low_score_words=low_score_words_data,
+            statistics=statistics_data,
+            topic=request.topic,
+            speech_rate=speech_rate,
+            audio_duration=audio_duration,
+            word_info_list=word_info_list,
+            language=request.language
+        )
+
+        return OpinionStatementResponse(
+            success=True,
+            message="Opinion statement report generated successfully",
+            message_id=msg_id,
+            audio_url=audio_url,
+            speech_text=speech_text,
+            speech_rate=speech_rate,
+            speech_scores=speech_scores,
+            statistics=statistics,
+            low_score_words=[
+                WordScore(word=w.get("word", ""), accuracy=w.get("accuracy", 0), fluency=w.get("fluency", 0))
+                for w in low_score_words_data
+            ] if low_score_words_data else None,
+            evaluation_report=evaluation_report
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        return OpinionStatementResponse(
+            success=False,
+            message="Opinion statement report generation failed",
+            message_id=msg_id,
+            audio_url=audio_url,
             error=str(e)
         )
