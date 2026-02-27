@@ -50,6 +50,7 @@ Body: {"aes_key": "your_aes_key"}
 | `POST /evaluation/tongue-twister-reading` | 绕口令/文章朗读评测（ASR + SOE + AI 分析） |
 | `POST /evaluation/voice-chat` | 语音对话（ASR + AI 对话 + TTS） |
 | `POST /evaluation/opinion-statement` | 一分钟观点陈述评测（SOE + AI 分析） |
+| `POST /evaluation/impromptu-reaction` | 即兴反应评测（ASR + SOE + AI 分析） |
 
 ### SOE - 语音评分
 | 接口 | 说明 |
