@@ -100,9 +100,39 @@
                     }
                 });
 
+                
+                const getAuthHeaders = () => {
+                    const auth = localStorage.getItem('admin_auth');
+                    return auth ? { 'Authorization': 'Basic ' + auth } : {};
+                };
+
+                const login = async () => {
+                    const username = prompt("Enter Admin Username:", "admin");
+                    if (!username) return false;
+                    const password = prompt("Enter Admin Password:", "admin123");
+                    if (!password) return false;
+                    
+                    const auth = btoa(username + ":" + password);
+                    localStorage.setItem('admin_auth', auth);
+                    return true;
+                };
+
+                const fetchWithAuth = async (url, options = {}) => {
+                    options.headers = { ...options.headers, ...getAuthHeaders() };
+                    let res = await fetch(url, options);
+                    
+                    if (res.status === 401) {
+                        if (await login()) {
+                            options.headers = { ...options.headers, ...getAuthHeaders() };
+                            res = await fetch(url, options);
+                        }
+                    }
+                    return res;
+                };
+
                 const fetchConfig = async () => {
                     try {
-                        const res = await fetch(`${API_BASE}/config/llm`);
+                        const res = await fetchWithAuth(`${API_BASE}/config/llm`);
                         const data = await res.json();
                         // 合并数据以防缺少某些 keys
                         config.value.provider = data.provider || 'tencent';
@@ -120,7 +150,7 @@
                 const saveConfig = async () => {
                     saving.value = true;
                     try {
-                        const res = await fetch(`${API_BASE}/config/llm`, {
+                        const res = await fetchWithAuth(`${API_BASE}/config/llm`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(config.value)

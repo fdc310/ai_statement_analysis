@@ -1,3 +1,4 @@
+import os
 """
 Security utilities including AES encryption/decryption.
 """
@@ -98,3 +99,29 @@ class AESService:
 
 # Singleton instance
 aes_service = AESService()
+
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+import secrets
+
+# 简单的 HTTP Basic Auth 用于管理后台
+basic_security = HTTPBasic()
+
+def verify_admin_credentials(credentials: HTTPBasicCredentials = Depends(basic_security)):
+    """
+    验证后台管理员凭证
+    默认账号密码 admin/admin123 (可通过环境变量配置)
+    """
+    admin_user = os.getenv("ADMIN_USERNAME", "admin")
+    admin_pass = os.getenv("ADMIN_PASSWORD", "admin123")
+    
+    is_user_ok = secrets.compare_digest(credentials.username, admin_user)
+    is_pass_ok = secrets.compare_digest(credentials.password, admin_pass)
+    
+    if not (is_user_ok and is_pass_ok):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect admin username or password",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return credentials.username

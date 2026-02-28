@@ -1,4 +1,5 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from app.core.security import verify_admin_credentials
 from pydantic import BaseModel
 from typing import Optional, Dict
 
@@ -28,12 +29,12 @@ class LLMProviderConfig(BaseModel):
     providers: Dict[str, dict]
 
 @router.get("/config/llm", response_model=LLMProviderConfig)
-async def get_llm_config():
+async def get_llm_config(admin: str = Depends(verify_admin_credentials)):
     """获取当前 LLM 提供商配置"""
     return MOCK_DB["llm_config"]
 
 @router.post("/config/llm")
-async def update_llm_config(config: LLMProviderConfig):
+async def update_llm_config(config: LLMProviderConfig, admin: str = Depends(verify_admin_credentials)):
     """更新 LLM 提供商配置"""
     MOCK_DB["llm_config"] = config.dict()
     # TODO: 这里未来可以通过 Event Bus 通知其他 worker 热重载配置
