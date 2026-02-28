@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Statement Analysis - 管理后台</title>
+    <!-- 引入 Vue 和 Element Plus (简单 CDN 方式起步，避免复杂的构建配置) -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css" />
+    <script src="https://unpkg.com/element-plus"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 0; padding: 20px; background-color: #f5f7fa; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .card-header { display: flex; justify-content: space-between; align-items: center; }
+        .mt-4 { margin-top: 1rem; }
+    </style>
+</head>
+<body>
+    <div id="app" class="container">
+        <el-card>
+            <template #header>
+                <div class="card-header">
+                    <h2>⚙️ 大模型路由配置 (LLM Routing)</h2>
+                    <el-button type="primary" @click="saveConfig" :loading="saving">保存配置</el-button>
+                </div>
+            </template>
+            
+            <div v-if="loading" style="padding: 20px; text-align: center;">加载中...</div>
+
+            <el-form v-else :model="config" label-width="120px" class="mt-4">
+                <el-form-item label="当前模型服务">
+                    <el-select v-model="config.provider" placeholder="请选择服务商" style="width: 100%;">
+                        <el-option label="腾讯混元 (Tencent Hunyuan)" value="tencent"></el-option>
+                        <el-option label="深度求索 (DeepSeek)" value="deepseek"></el-option>
+                        <el-option label="OpenAI (通用标准接口)" value="openai"></el-option>
+                    </el-select>
+                </el-form-item>
+
+                <el-divider>提供商详细配置</el-divider>
+
+                <!-- 腾讯配置 -->
+                <div v-if="config.provider === 'tencent'">
+                    <el-alert title="如果留空，将使用服务器的环境变量配置" type="info" :closable="false" style="margin-bottom: 20px;"></el-alert>
+                    <el-form-item label="Secret ID">
+                        <el-input v-model="config.providers.tencent.secret_id" type="password" show-password placeholder="Tencent Secret ID"></el-input>
+                    </el-form-item>
+                    <el-form-item label="Secret Key">
+                        <el-input v-model="config.providers.tencent.secret_key" type="password" show-password placeholder="Tencent Secret Key"></el-input>
+                    </el-form-item>
+                    <el-form-item label="Model Name">
+                        <el-input v-model="config.providers.tencent.model" placeholder="例如: hunyuan-turbo"></el-input>
+                    </el-form-item>
+                </div>
+
+                <!-- DeepSeek 配置 -->
+                <div v-if="config.provider === 'deepseek'">
+                    <el-form-item label="API Key">
+                        <el-input v-model="config.providers.deepseek.api_key" type="password" show-password placeholder="sk-..."></el-input>
+                    </el-form-item>
+                    <el-form-item label="Base URL">
+                        <el-input v-model="config.providers.deepseek.base_url" placeholder="https://api.deepseek.com"></el-input>
+                    </el-form-item>
+                    <el-form-item label="Model Name">
+                        <el-input v-model="config.providers.deepseek.model" placeholder="例如: deepseek-chat"></el-input>
+                    </el-form-item>
+                </div>
+                
+                <!-- OpenAI 配置 -->
+                <div v-if="config.provider === 'openai'">
+                    <el-alert title="支持任何兼容 OpenAI API 标准的服务（通义千问、Kimi 等）" type="success" :closable="false" style="margin-bottom: 20px;"></el-alert>
+                    <el-form-item label="API Key">
+                        <el-input v-model="config.providers.openai.api_key" type="password" show-password placeholder="sk-..."></el-input>
+                    </el-form-item>
+                    <el-form-item label="Base URL">
+                        <el-input v-model="config.providers.openai.base_url" placeholder="https://api.openai.com/v1"></el-input>
+                    </el-form-item>
+                    <el-form-item label="Model Name">
+                        <el-input v-model="config.providers.openai.model" placeholder="例如: gpt-4o"></el-input>
+                    </el-form-item>
+                </div>
+            </el-form>
+        </el-card>
+    </div>
+
+    <script>
+        const { createApp, ref, onMounted } = Vue;
+        // 假设后台API跑在 8000 端口
+        const API_BASE = "http://localhost:8000/api/v1/admin";
+
+        const app = createApp({
+            setup() {
+                const loading = ref(true);
+                const saving = ref(false);
+                const config = ref({
+                    provider: 'tencent',
+                    providers: {
+                        tencent: { secret_id: '', secret_key: '', model: 'hunyuan-turbo' },
+                        deepseek: { api_key: '', base_url: 'https://api.deepseek.com', model: 'deepseek-chat' },
+                        openai: { api_key: '', base_url: 'https://api.openai.com/v1', model: 'gpt-4o' }
+                    }
+                });
+
+                const fetchConfig = async () => {
+                    try {
+                        const res = await fetch(`${API_BASE}/config/llm`);
+                        const data = await res.json();
+                        // 合并数据以防缺少某些 keys
+                        config.value.provider = data.provider || 'tencent';
+                        if(data.providers) {
+                            config.value.providers = { ...config.value.providers, ...data.providers };
+                        }
+                    } catch (e) {
+                        ElementPlus.ElMessage.error("获取配置失败，请确保后端服务正在运行。");
+                        console.error(e);
+                    } finally {
+                        loading.value = false;
+                    }
+                };
+
+                const saveConfig = async () => {
+                    saving.value = true;
+                    try {
+                        const res = await fetch(`${API_BASE}/config/llm`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(config.value)
+                        });
+                        const data = await res.json();
+                        if (data.success) {
+                            ElementPlus.ElMessage.success("配置已保存并热重载！");
+                        } else {
+                            ElementPlus.ElMessage.error("保存失败。");
+                        }
+                    } catch (e) {
+                        ElementPlus.ElMessage.error("网络错误。");
+                    } finally {
+                        saving.value = false;
+                    }
+                };
+
+                onMounted(() => {
+                    fetchConfig();
+                });
+
+                return { config, loading, saving, saveConfig };
+            }
+        });
+
+        app.use(ElementPlus);
+        app.mount('#app');
+    </script>
+</body>
+</html>

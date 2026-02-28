@@ -8,6 +8,8 @@ A FastAPI application that provides speech evaluation services:
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+import os
 
 from app.core.config import settings
 from app.api.v1 import api_router
@@ -84,6 +86,12 @@ app.add_middleware(
 
 # Include API v1 router
 app.include_router(api_router, prefix="/api/v1")
+
+# Mount admin frontend
+frontend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "admin-frontend")
+if os.path.exists(frontend_dir):
+    app.mount("/admin-ui", StaticFiles(directory=frontend_dir, html=True), name="admin-ui")
+
 
 
 @app.get("/")
