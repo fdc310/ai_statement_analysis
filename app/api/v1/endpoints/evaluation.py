@@ -2097,15 +2097,17 @@ async def evaluate_impromptu_reaction(
     
     try:
         from app.services.tencent.audio import download_audio_file
-        from app.services.tencent.asr import recognize_speech
-        from app.services.tencent.soe import evaluate_speech
+        from app.services.asr import get_default_asr
+        asr_service = get_default_asr()
+        from app.services.soe import get_default_soe
+        soe_service = get_default_soe()
         from app.services.tencent.hunyuan import analyze_impromptu_reaction
 
         # 1. Download Audio
         audio_path = await download_audio_file(str(request.audio_url))
         
         # 2. ASR (Speech to Text)
-        asr_result = await recognize_speech(audio_path)
+        asr_result = await asr_service.recognize(audio_path)
         if not asr_result.get("success"):
             raise HTTPException(status_code=500, detail=f"ASR failed: {asr_result.get('error')}")
             
@@ -2123,7 +2125,7 @@ async def evaluate_impromptu_reaction(
         word_info_list = asr_result.get("word_info_list", [])
 
         # 3. SOE (Speech Evaluation) with score_coeff=3.5 (default strict)
-        soe_result = await evaluate_speech(
+        soe_result = await soe_service.evaluate(
             audio_path=audio_path,
             text=speech_text,
             score_coeff=request.score_coeff,
