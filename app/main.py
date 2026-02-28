@@ -12,7 +12,11 @@ from fastapi.staticfiles import StaticFiles
 import os
 
 from app.core.config import settings
+from app.core.database import engine
+from app.models import config as models
 from app.api.v1 import api_router
+
+models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title=settings.app_name,

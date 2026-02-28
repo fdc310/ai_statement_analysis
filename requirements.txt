@@ -25,3 +25,4 @@ python-dotenv>=1.0.0
 
 # minio sdk
 minio
+SQLAlchemy>=2.0.23

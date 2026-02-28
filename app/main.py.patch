@@ -1,0 +1,18 @@
+import re
+
+with open("ai_statement_analysis/app/main.py", "r") as f:
+    content = f.read()
+
+# Create DB tables on startup
+if "models.Base.metadata.create_all" not in content:
+    content = content.replace(
+        "from app.core.config import settings",
+        "from app.core.config import settings\nfrom app.core.database import engine\nfrom app.models import config as models"
+    )
+    content = content.replace(
+        "app = FastAPI(",
+        "models.Base.metadata.create_all(bind=engine)\n\napp = FastAPI("
+    )
+
+with open("ai_statement_analysis/app/main.py", "w") as f:
+    f.write(content)

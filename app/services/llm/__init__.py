@@ -1,12 +1,24 @@
 from app.services.llm.factory import LLMFactory
 from app.core.config import settings
+from app.core.database import SessionLocal
+from app.models.config import SystemConfig
 
 def get_default_llm():
-    """获取系统默认配置的大模型实例（动态读取后台配置）"""
-    # 动态导入避免循环依赖
-    from app.api.v1.endpoints.admin import MOCK_DB
-    
-    config = MOCK_DB["llm_config"]
+    """获取系统默认配置的大模型实例（从 SQLite 数据库实时读取）"""
+    db = SessionLocal()
+    try:
+        config_record = db.query(SystemConfig).filter(SystemConfig.key == "llm_config").first()
+        if config_record and config_record.value:
+            config = config_record.value
+        else:
+            config = {"provider": "tencent", "providers": {}}
+    except Exception as e:
+        import logging
+        logging.error(f"Failed to read LLM config from DB, falling back to env vars: {e}")
+        config = {"provider": "tencent", "providers": {}}
+    finally:
+        db.close()
+        
     provider = config.get("provider", "tencent")
     provider_settings = config.get("providers", {}).get(provider, {})
     
