@@ -3,7 +3,7 @@ API v1 router - aggregates all endpoint routers.
 """
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import evaluation, auth, soe, tts
+from app.api.v1.endpoints import evaluation, auth, soe, tts, admin
 
 api_router = APIRouter()
 
@@ -27,4 +27,10 @@ api_router.include_router(
     tts.router,
     prefix="/tts",
     tags=["TTS - Text to Speech"]
+)
+
+api_router.include_router(
+    admin.router,
+    prefix="/admin",
+    tags=["Admin & Configuration"]
 )

@@ -140,11 +140,13 @@ class HunyuanService(TencentCloudClient):
         )
 
         messages = [
-            {"Role": "system", "Content": system_prompt},
-            {"Role": "user", "Content": user_prompt}
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
         ]
 
-        result = await self.chat(messages, temperature=0.3)
+        from app.services.llm import get_default_llm
+        llm = get_default_llm()
+        result = await llm.chat(messages, temperature=0.3)
         return result["content"]
 
     def _build_evaluation_system_prompt(self) -> str:
@@ -283,11 +285,13 @@ class HunyuanService(TencentCloudClient):
         )
 
         messages = [
-            {"Role": "system", "Content": system_prompt},
-            {"Role": "user", "Content": user_prompt}
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
         ]
 
-        result = await self.chat(messages, temperature=0.3)
+        from app.services.llm import get_default_llm
+        llm = get_default_llm()
+        result = await llm.chat(messages, temperature=0.3)
         return result["content"]
 
     def _build_extended_system_prompt(self, has_topic: bool) -> str:
@@ -472,11 +476,13 @@ class HunyuanService(TencentCloudClient):
         )
 
         messages = [
-            {"Role": "system", "Content": system_prompt},
-            {"Role": "user", "Content": user_prompt}
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
         ]
 
-        result = await self.chat(messages, temperature=0.3)
+        from app.services.llm import get_default_llm
+        llm = get_default_llm()
+        result = await llm.chat(messages, temperature=0.3)
         content = result["content"]
 
         # 解析 JSON
@@ -595,11 +601,13 @@ class HunyuanService(TencentCloudClient):
         )
 
         messages = [
-            {"Role": "system", "Content": system_prompt},
-            {"Role": "user", "Content": user_prompt}
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
         ]
 
-        result = await self.chat(messages, temperature=0.3)
+        from app.services.llm import get_default_llm
+        llm = get_default_llm()
+        result = await llm.chat(messages, temperature=0.3)
         content = result["content"]
 
         # 解析 JSON
@@ -932,11 +940,13 @@ class HunyuanService(TencentCloudClient):
 请严格按照JSON格式输出分析结果。"""
 
         messages = [
-            {"Role": "system", "Content": system_prompt},
-            {"Role": "user", "Content": user_prompt}
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
         ]
 
-        result = await self.chat(messages, temperature=0.3)
+        from app.services.llm import get_default_llm
+        llm = get_default_llm()
+        result = await llm.chat(messages, temperature=0.3)
         return result["content"]
 
     async def analyze_tongue_twister(
@@ -1110,11 +1120,13 @@ Note:
 请严格按照JSON格式输出分析结果，重点分析核心音素、声学特征差异和发音技巧。"""
 
         messages = [
-            {"Role": "system", "Content": system_prompt},
-            {"Role": "user", "Content": user_prompt}
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
         ]
 
-        result = await self.chat(messages, temperature=0.3)
+        from app.services.llm import get_default_llm
+        llm = get_default_llm()
+        result = await llm.chat(messages, temperature=0.3)
         return result["content"]
 
     async def analyze_sentence_interpretation(
@@ -1177,11 +1189,13 @@ Note:
 请严格按照JSON格式输出分析结果。"""
 
         messages = [
-            {"Role": "system", "Content": system_prompt},
-            {"Role": "user", "Content": user_prompt}
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
         ]
 
-        result = await self.chat(messages, temperature=0.3)
+        from app.services.llm import get_default_llm
+        llm = get_default_llm()
+        result = await llm.chat(messages, temperature=0.3)
         return result["content"]
 
     async def analyze_story_reading(
@@ -1306,11 +1320,13 @@ Note:
 请严格按照JSON格式输出分析结果，包含结构完整性、逻辑连贯性、语言流畅度、事件分布和待改进建议。"""
 
         messages = [
-            {"Role": "system", "Content": system_prompt},
-            {"Role": "user", "Content": user_prompt}
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
         ]
 
-        result = await self.chat(messages, temperature=0.3)
+        from app.services.llm import get_default_llm
+        llm = get_default_llm()
+        result = await llm.chat(messages, temperature=0.3)
         content = result["content"]
 
         # Parse JSON
@@ -1423,11 +1439,13 @@ Note:
             )
 
         messages = [
-            {"Role": "system", "Content": system_prompt},
-            {"Role": "user", "Content": user_prompt}
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
         ]
 
-        result = await self.chat(messages, temperature=0.3)
+        from app.services.llm import get_default_llm
+        llm = get_default_llm()
+        result = await llm.chat(messages, temperature=0.3)
         content = result["content"]
 
         # Parse JSON
@@ -1828,11 +1846,13 @@ Note:
         )
 
         messages = [
-            {"Role": "system", "Content": system_prompt},
-            {"Role": "user", "Content": user_prompt}
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
         ]
 
-        result = await self.chat(messages, temperature=0.3)
+        from app.services.llm import get_default_llm
+        llm = get_default_llm()
+        result = await llm.chat(messages, temperature=0.3)
         content = result["content"]
 
         # 解析 JSON
@@ -2207,7 +2227,7 @@ async def analyze_impromptu_reaction(
     """
     即兴反应专项分析 (Impromptu Reaction Analysis)
     """
-    from app.services.tencent.hunyuan import generate_json
+    from app.services.llm.prompts import generate_json_with_llm
     
     prompt = f"""你是一名资深的即兴演讲与沟通教练。请针对以下"即兴反应"场景，结合用户的发言转写和语音词级时间戳，进行专业、犀利、结构化的评测。
 
@@ -2274,6 +2294,6 @@ async def analyze_impromptu_reaction(
     "strengths": ["<优点1>", "<优点2>"]
 }}
 """
-    return await generate_json(prompt)
+    return await generate_json_with_llm(prompt)
 
 

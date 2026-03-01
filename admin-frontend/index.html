@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Statement Analysis - 管理后台</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css" />
+    <script src="https://unpkg.com/element-plus"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 0; padding: 20px; background-color: #f5f7fa; }
+        .container { max-width: 900px; margin: 0 auto; }
+        .card-header { display: flex; justify-content: space-between; align-items: center; }
+        .mt-4 { margin-top: 1rem; }
+    </style>
+</head>
+<body>
+    <div id="app" class="container">
+        <h2>🛠️ 系统配置中心 (Control Panel)</h2>
+        
+        <el-tabs v-model="activeTab" class="mt-4" type="border-card">
+            
+            <!-- 大模型配置 (LLM) -->
+            <el-tab-pane label="大模型路由 (LLM)" name="llm">
+                <el-card shadow="never">
+                    <template #header>
+                        <div class="card-header">
+                            <span>LLM 提供商配置</span>
+                            <el-button type="primary" size="small" @click="saveConfig('llm')" :loading="saving.llm">保存 LLM</el-button>
+                        </div>
+                    </template>
+                    <div v-if="loading.llm" style="text-align: center; padding: 10px;">加载中...</div>
+                    <el-form v-else :model="configs.llm" label-width="120px">
+                        <el-form-item label="当前模型服务">
+                            <el-select v-model="configs.llm.provider" style="width: 100%;">
+                                <el-option label="腾讯混元 (Tencent Hunyuan)" value="tencent"></el-option>
+                                <el-option label="深度求索 (DeepSeek)" value="deepseek"></el-option>
+                                <el-option label="OpenAI (通用标准接口)" value="openai"></el-option>
+                            </el-select>
+                        </el-form-item>
+
+                        <el-divider>详细配置</el-divider>
+
+                        <div v-if="configs.llm.provider === 'tencent'">
+                            <el-alert title="如果留空，将使用服务器的环境变量配置" type="info" :closable="false" style="margin-bottom: 20px;"></el-alert>
+                            <el-form-item label="Secret ID"><el-input v-model="configs.llm.providers.tencent.secret_id" type="password" show-password></el-input></el-form-item>
+                            <el-form-item label="Secret Key"><el-input v-model="configs.llm.providers.tencent.secret_key" type="password" show-password></el-input></el-form-item>
+                            <el-form-item label="Model Name"><el-input v-model="configs.llm.providers.tencent.model" placeholder="例如: hunyuan-turbo"></el-input></el-form-item>
+                        </div>
+                        <div v-if="configs.llm.provider === 'deepseek'">
+                            <el-form-item label="API Key"><el-input v-model="configs.llm.providers.deepseek.api_key" type="password" show-password></el-input></el-form-item>
+                            <el-form-item label="Base URL"><el-input v-model="configs.llm.providers.deepseek.base_url" placeholder="https://api.deepseek.com"></el-input></el-form-item>
+                            <el-form-item label="Model Name"><el-input v-model="configs.llm.providers.deepseek.model" placeholder="例如: deepseek-chat"></el-input></el-form-item>
+                        </div>
+                        <div v-if="configs.llm.provider === 'openai'">
+                            <el-alert title="支持任何兼容 OpenAI API 标准的服务（通义千问、Kimi 等）" type="success" :closable="false" style="margin-bottom: 20px;"></el-alert>
+                            <el-form-item label="API Key"><el-input v-model="configs.llm.providers.openai.api_key" type="password" show-password></el-input></el-form-item>
+                            <el-form-item label="Base URL"><el-input v-model="configs.llm.providers.openai.base_url" placeholder="https://api.openai.com/v1"></el-input></el-form-item>
+                            <el-form-item label="Model Name"><el-input v-model="configs.llm.providers.openai.model" placeholder="例如: gpt-4o"></el-input></el-form-item>
+                        </div>
+                    </el-form>
+                </el-card>
+            </el-tab-pane>
+
+            <!-- 语音识别配置 (ASR) -->
+            <el-tab-pane label="语音听写 (ASR)" name="asr">
+                <el-card shadow="never">
+                    <template #header>
+                        <div class="card-header">
+                            <span>ASR 提供商配置</span>
+                            <el-button type="primary" size="small" @click="saveConfig('asr')" :loading="saving.asr">保存 ASR</el-button>
+                        </div>
+                    </template>
+                    <div v-if="loading.asr" style="text-align: center; padding: 10px;">加载中...</div>
+                    <el-form v-else :model="configs.asr" label-width="120px">
+                        <el-form-item label="当前 ASR 服务">
+                            <el-select v-model="configs.asr.provider" style="width: 100%;">
+                                <el-option label="腾讯云 (Tencent)" value="tencent"></el-option>
+                                <el-option label="科大讯飞 (iFlytek)" value="xunfei"></el-option>
+                            </el-select>
+                        </el-form-item>
+                        <el-divider>详细配置</el-divider>
+                        <div v-if="configs.asr.provider === 'tencent'">
+                            <el-alert title="如果留空，将使用服务器的环境变量配置" type="info" :closable="false" style="margin-bottom: 20px;"></el-alert>
+                            <el-form-item label="App ID (可选)"><el-input v-model="configs.asr.providers.tencent.appid"></el-input></el-form-item>
+                            <el-form-item label="Secret ID"><el-input v-model="configs.asr.providers.tencent.secret_id" type="password" show-password></el-input></el-form-item>
+                            <el-form-item label="Secret Key"><el-input v-model="configs.asr.providers.tencent.secret_key" type="password" show-password></el-input></el-form-item>
+                        </div>
+                        <div v-if="configs.asr.provider === 'xunfei'">
+                            <el-alert title="请填写讯飞开放平台申请的 WebSocket 接口凭证" type="warning" :closable="false" style="margin-bottom: 20px;"></el-alert>
+                            <el-form-item label="APP ID"><el-input v-model="configs.asr.providers.xunfei.app_id"></el-input></el-form-item>
+                            <el-form-item label="API Key"><el-input v-model="configs.asr.providers.xunfei.api_key" type="password" show-password></el-input></el-form-item>
+                            <el-form-item label="API Secret"><el-input v-model="configs.asr.providers.xunfei.api_secret" type="password" show-password></el-input></el-form-item>
+                        </div>
+                    </el-form>
+                </el-card>
+            </el-tab-pane>
+
+            <!-- 语音评测配置 (SOE) -->
+            <el-tab-pane label="语音评测 (SOE)" name="soe">
+                <el-card shadow="never">
+                    <template #header>
+                        <div class="card-header">
+                            <span>SOE 提供商配置</span>
+                            <el-button type="primary" size="small" @click="saveConfig('soe')" :loading="saving.soe">保存 SOE</el-button>
+                        </div>
+                    </template>
+                    <div v-if="loading.soe" style="text-align: center; padding: 10px;">加载中...</div>
+                    <el-form v-else :model="configs.soe" label-width="120px">
+                        <el-form-item label="当前 SOE 服务">
+                            <el-select v-model="configs.soe.provider" style="width: 100%;">
+                                <el-option label="腾讯云 (Tencent)" value="tencent"></el-option>
+                                <el-option label="科大讯飞 (iFlytek ISE)" value="xunfei"></el-option>
+                            </el-select>
+                        </el-form-item>
+                        <el-divider>详细配置</el-divider>
+                        <div v-if="configs.soe.provider === 'tencent'">
+                            <el-alert title="如果留空，将使用服务器的环境变量配置" type="info" :closable="false" style="margin-bottom: 20px;"></el-alert>
+                            <el-form-item label="App ID (可选)"><el-input v-model="configs.soe.providers.tencent.appid"></el-input></el-form-item>
+                            <el-form-item label="Secret ID"><el-input v-model="configs.soe.providers.tencent.secret_id" type="password" show-password></el-input></el-form-item>
+                            <el-form-item label="Secret Key"><el-input v-model="configs.soe.providers.tencent.secret_key" type="password" show-password></el-input></el-form-item>
+                        </div>
+                        <div v-if="configs.soe.provider === 'xunfei'">
+                            <el-alert title="请填写讯飞语音评测 ISE 接口凭证" type="warning" :closable="false" style="margin-bottom: 20px;"></el-alert>
+                            <el-form-item label="APP ID"><el-input v-model="configs.soe.providers.xunfei.app_id"></el-input></el-form-item>
+                            <el-form-item label="API Key"><el-input v-model="configs.soe.providers.xunfei.api_key" type="password" show-password></el-input></el-form-item>
+                            <el-form-item label="API Secret"><el-input v-model="configs.soe.providers.xunfei.api_secret" type="password" show-password></el-input></el-form-item>
+                        </div>
+                    </el-form>
+                </el-card>
+            </el-tab-pane>
+
+        </el-tabs>
+    </div>
+
+    <script>
+        const { createApp, ref, reactive, onMounted } = Vue;
+        const API_BASE = "http://localhost:8000/api/v1/admin";
+
+        const app = createApp({
+            setup() {
+                const activeTab = ref('llm');
+                
+                const loading = reactive({ llm: true, asr: true, soe: true });
+                const saving = reactive({ llm: false, asr: false, soe: false });
+                
+                const configs = reactive({
+                    llm: { provider: 'tencent', providers: { tencent: {}, deepseek: {}, openai: {} } },
+                    asr: { provider: 'tencent', providers: { tencent: {}, xunfei: {} } },
+                    soe: { provider: 'tencent', providers: { tencent: {}, xunfei: {} } }
+                });
+
+                const getAuthHeaders = () => {
+                    const auth = localStorage.getItem('admin_auth');
+                    return auth ? { 'Authorization': 'Basic ' + auth } : {};
+                };
+
+                const login = async () => {
+                    const username = prompt("Enter Admin Username:", "admin");
+                    if (!username) return false;
+                    const password = prompt("Enter Admin Password:", "admin123");
+                    if (!password) return false;
+                    const auth = btoa(username + ":" + password);
+                    localStorage.setItem('admin_auth', auth);
+                    return true;
+                };
+
+                const fetchWithAuth = async (url, options = {}) => {
+                    options.headers = { ...options.headers, ...getAuthHeaders() };
+                    let res = await fetch(url, options);
+                    if (res.status === 401) {
+                        if (await login()) {
+                            options.headers = { ...options.headers, ...getAuthHeaders() };
+                            res = await fetch(url, options);
+                        }
+                    }
+                    return res;
+                };
+
+                const fetchConfig = async (type) => {
+                    loading[type] = true;
+                    try {
+                        const res = await fetchWithAuth(`${API_BASE}/config/${type}`);
+                        const data = await res.json();
+                        configs[type].provider = data.provider || (type === 'llm' ? 'tencent' : 'tencent');
+                        if (data.providers) {
+                            configs[type].providers = { ...configs[type].providers, ...data.providers };
+                        }
+                    } catch (e) {
+                        console.error(`Failed to load ${type} config`, e);
+                    } finally {
+                        loading[type] = false;
+                    }
+                };
+
+                const saveConfig = async (type) => {
+                    saving[type] = true;
+                    try {
+                        const res = await fetchWithAuth(`${API_BASE}/config/${type}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(configs[type])
+                        });
+                        if (res.ok) {
+                            ElementPlus.ElMessage.success(`${type.toUpperCase()} 配置已保存并热重载！`);
+                        } else {
+                            ElementPlus.ElMessage.error("保存失败！");
+                        }
+                    } catch (e) {
+                        ElementPlus.ElMessage.error("网络错误！");
+                    } finally {
+                        saving[type] = false;
+                    }
+                };
+
+                onMounted(() => {
+                    fetchConfig('llm');
+                    fetchConfig('asr');
+                    fetchConfig('soe');
+                });
+
+                return { activeTab, loading, saving, configs, saveConfig };
+            }
+        });
+
+        app.use(ElementPlus);
+        app.mount('#app');
+    </script>
+</body>
+</html>
