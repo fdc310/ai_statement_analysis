@@ -44,7 +44,9 @@ from app.schemas.evaluation import (
     VoiceChatRequest,
     VoiceChatResponse,
     OpinionStatementRequest,
-    OpinionStatementResponse
+    OpinionStatementResponse,
+    ImpromptuReactionRequest,
+    ImpromptuReactionResponse
 )
 from app.services.tencent import asr_service, soe_service, hunyuan_service, tts_service
 
@@ -2089,96 +2091,143 @@ async def generate_opinion_statement_report(
 @router.post("/impromptu-reaction", response_model=ImpromptuReactionResponse)
 async def evaluate_impromptu_reaction(
     request: ImpromptuReactionRequest,
-    x_signature: Optional[str] = Header(None, description="AES加密签名")
-):
+    x_signature: Optional[str] = Header(None, alias="X-Signature")
+) -> ImpromptuReactionResponse:
     """
-    即兴反应评测 (Impromptu Reaction)
-    - 结合 ASR 和 SOE
-    - 分析反应速度、结构形成、逻辑连贯度和冗余度
-    - 提供“下一次只改一件事”的实战建议
-    """
-    if settings.require_signature:
-        # verify_signature(x_signature, request.json())  # Assuming signature verification happens here or via dependency
-        pass
+    即兴反应评测接口（同步接口）。
 
-    message_id = request.message_id or str(uuid.uuid4())
-    audio_path = None
-    
+    传入音频URL，接口自动进行ASR语音识别和SOE发音评测，
+    再由混元AI针对"即兴反应"场景生成专项评测报告。
+
+    **处理流程**:
+    1. 下载音频文件
+    2. ASR语音识别（带时间戳）与 SOE发音评测 并行执行
+    3. 混元AI综合分析即兴反应表现
+
+    **评测维度**:
+    - 反应速度：开口时间、思考停顿
+    - 内容相关性：是否切题、是否跑题
+    - 结构形成：是否有清晰的开头-主体-结尾
+    - 逻辑连贯度：论点之间的衔接
+    - 表达冗余度：口头禅、废话比例
+
+    **请求参数**:
+    | 参数 | 类型 | 必填 | 说明 |
+    |------|------|------|------|
+    | audio_url | string | 是 | 音频文件URL |
+    | scenario | string | 否 | 即兴反应场景/题目描述 |
+    | score_coeff | float | 否 | SOE评分苛刻指数：1.0(宽松)-4.0(严格)，默认3.5 |
+    | language | string | 否 | 语言，默认zh |
+    | message_id | string | 否 | 消息ID |
+
+    **Headers**:
+    - X-Signature: AES加密签名（必填）
+    """
+    # Verify signature from header
+    verify_signature(x_signature)
+
+    # Generate message_id if not provided
+    msg_id = request.message_id or str(uuid.uuid4())
+    audio_url = str(request.audio_url)
+
     try:
-        from app.services.tencent.audio import download_audio_file
-        from app.services.tencent.asr import recognize_speech
-        from app.services.tencent.soe import evaluate_speech
-        from app.services.tencent.hunyuan import analyze_impromptu_reaction
+        # 1. Download audio
+        audio_data = await asr_service.download_audio(audio_url)
 
-        # 1. Download Audio
-        audio_path = await download_audio_file(str(request.audio_url))
-        
-        # 2. ASR (Speech to Text)
-        asr_result = await recognize_speech(audio_path)
-        if not asr_result.get("success"):
-            raise HTTPException(status_code=500, detail=f"ASR failed: {asr_result.get('error')}")
-            
-        speech_text = asr_result.get("text", "")
-        if not speech_text:
-             return ImpromptuReactionResponse(
-                success=True,
-                message="Audio processed, but no speech detected",
-                message_id=message_id,
-                audio_url=str(request.audio_url),
-                speech_text="",
-                evaluation_report={"error": "未检测到有效语音内容，无法生成报告"}
+        # 2. Run ASR (with timestamps) and SOE in parallel
+        # Impromptu reaction uses eval_mode=3 (free speech mode)
+        engine_type = "16k_zh" if request.language == "zh" else "16k_en"
+
+        asr_result, soe_result = await asyncio.gather(
+            asr_service.recognize_audio(
+                audio_data,
+                engine_type=engine_type,
+                word_info=1
+            ),
+            soe_service.evaluate_audio(
+                audio_data,
+                ref_text="",
+                eval_mode=3,
+                score_coeff=request.score_coeff,
+                server_type=0
             )
-            
+        )
+
+        # 3. Extract ASR results
+        speech_text = asr_result.get("text", "")
         word_info_list = asr_result.get("word_info_list", [])
 
-        # 3. SOE (Speech Evaluation) with score_coeff=3.5 (default strict)
-        soe_result = await evaluate_speech(
-            audio_path=audio_path,
-            text=speech_text,
-            score_coeff=request.score_coeff,
+        # 4. Extract SOE results
+        scores_data = soe_result.get("scores", {})
+        low_score_words_data = soe_result.get("low_score_words", [])
+        statistics_data = soe_result.get("statistics", {})
+
+        # Build typed score objects for response
+        speech_scores = SpeechScores(
+            pronunciation_accuracy=scores_data.get("pronunciation_accuracy", 0),
+            pronunciation_fluency=scores_data.get("pronunciation_fluency", 0),
+            pronunciation_completion=scores_data.get("pronunciation_completion", 0),
+            suggested_score=scores_data.get("suggested_score", 0),
+            overall_score=scores_data.get("overall_score", 0)
+        )
+
+        statistics = EvaluationStatistics(
+            total_words=statistics_data.get("total_words", 0),
+            average_accuracy=statistics_data.get("average_accuracy", 0),
+            low_score_count=statistics_data.get("low_score_count", 0)
+        )
+
+        # 5. Calculate audio duration and speech rate from timestamps
+        audio_duration = None
+        speech_rate = None
+        if word_info_list:
+            last_word = word_info_list[-1]
+            audio_duration = last_word.get("end_time", 0) / 1000
+
+        if audio_duration and audio_duration > 0 and speech_text:
+            if request.language == "zh":
+                punctuation = string.punctuation + '。，！？、；：""''（）【】《》…—'
+                char_count = len([c for c in speech_text if c not in punctuation and not c.isspace()])
+            else:
+                char_count = len(speech_text.split())
+            speech_rate = round(char_count / (audio_duration / 60), 1)
+
+        # 6. Generate impromptu reaction report via Hunyuan
+        evaluation_report = await hunyuan_service.generate_impromptu_reaction_report(
+            speech_text=speech_text,
+            speech_scores=scores_data,
+            low_score_words=low_score_words_data,
+            statistics=statistics_data,
+            scenario=request.scenario,
+            speech_rate=speech_rate,
+            audio_duration=audio_duration,
+            word_info_list=word_info_list,
             language=request.language
         )
-        
-        # 4. AI Report (Hunyuan) for Impromptu Reaction
-        ai_report = await analyze_impromptu_reaction(
-            text=speech_text,
-            scenario=request.scenario,
-            word_info_list=word_info_list
-        )
-        
-        response = ImpromptuReactionResponse(
+
+        return ImpromptuReactionResponse(
             success=True,
-            message="Impromptu reaction evaluation completed successfully",
-            message_id=message_id,
-            audio_url=str(request.audio_url),
+            message="Impromptu reaction report generated successfully",
+            message_id=msg_id,
+            audio_url=audio_url,
             speech_text=speech_text,
-            speech_rate=soe_result.get("speech_rate"),
-            evaluation_report=ai_report
+            speech_rate=speech_rate,
+            speech_scores=speech_scores,
+            statistics=statistics,
+            low_score_words=[
+                WordScore(word=w.get("word", ""), accuracy=w.get("accuracy", 0), fluency=w.get("fluency", 0))
+                for w in low_score_words_data
+            ] if low_score_words_data else None,
+            evaluation_report=evaluation_report
         )
-        
-        # Extract SOE scores if available
-        if soe_result and soe_result.get("success"):
-            response.speech_scores = soe_result.get("scores")
-            response.statistics = soe_result.get("statistics")
-            response.low_score_words = soe_result.get("low_score_words")
 
-        return response
-
+    except HTTPException:
+        raise
     except Exception as e:
-        import traceback
-        import logging
-        logging.error(f"Error in evaluate_impromptu_reaction: {str(e)}\n{traceback.format_exc()}")
         return ImpromptuReactionResponse(
             success=False,
-            message="Internal server error during impromptu reaction evaluation",
-            message_id=message_id,
-            audio_url=str(request.audio_url),
+            message="Impromptu reaction report generation failed",
+            message_id=msg_id,
+            audio_url=audio_url,
             error=str(e)
         )
-    finally:
-        # Cleanup
-        if audio_path and os.path.exists(audio_path):
-            try:
-                os.remove(audio_path)
-            except Exception:
-                pass
