@@ -1676,7 +1676,16 @@ async def evaluate_tongue_twister_reading(
         # Download audio
         audio_data = await asr_service.download_audio(audio_url)
 
-        # Run ASR (with timestamps) and SOE (with ref_text) in parallel
+        # Determine SOE eval_mode based on ref_text length
+        # ref_text <= 120: eval_mode=2 (paragraph mode)
+        # ref_text > 120: eval_mode=3 (free speech mode)
+        ref_text = request.tongue_twister_text
+        if len(ref_text) > 120:
+            soe_eval_mode = 3
+        else:
+            soe_eval_mode = 2
+
+        # Run ASR (with timestamps) and SOE in parallel
         asr_result, soe_result = await asyncio.gather(
             asr_service.recognize_audio(
                 audio_data,
@@ -1685,8 +1694,8 @@ async def evaluate_tongue_twister_reading(
             ),
             soe_service.evaluate_audio(
                 audio_data,
-                ref_text=request.tongue_twister_text,
-                eval_mode=1,
+                ref_text=ref_text,
+                eval_mode=soe_eval_mode,
                 score_coeff=request.score_coeff,
                 server_type=0
             )
@@ -1992,7 +2001,7 @@ async def generate_opinion_statement_report(
             soe_service.evaluate_audio(
                 audio_data,
                 ref_text=soe_ref_text,
-                eval_mode=1,
+                eval_mode=3,
                 score_coeff=request.score_coeff,
                 server_type=0
             )
