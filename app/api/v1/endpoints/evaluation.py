@@ -1956,28 +1956,109 @@ async def generate_opinion_statement_report(
 
     **处理流程**:
     1. 下载音频文件
-    2. ASR语音识别（带时间戳）与 SOE发音评测 并行执行
-    3. 混元AI综合分析观点陈述表现
+    2. ASR语音识别（带时间戳）与 SOE发音评测（eval_mode=3自由说）并行执行
+    3. 混元AI综合分析观点陈述表现（含词级时间戳用于时间节奏分析）
 
     **评测维度**:
-    - 观点明确性（25%）：是否开门见山、观点是否鲜明，识别回避式开头
-    - 结构完整度（20%）：观点→理由→举例→总结 四要素是否完整
-    - 逻辑清晰度（25%）：是否存在逻辑跳跃、矛盾、论据堆砌
-    - 时间节奏（15%）：时长是否合适、前后半段语速变化、是否慌张加速
+    - 观点明确性（20%）：是否开门见山、观点是否鲜明，识别回避式开头
+    - 逻辑清晰度（20%）：是否存在逻辑跳跃、矛盾、论据堆砌
     - 表达精炼度（15%）：口头禅频率、废话比例、有效内容占比
+    - 流畅度（15%）：基于SOE发音流利度数据
+    - 语速（10%）：语速是否在合理区间
+    - 结构完整度（10%）：观点→理由→举例→总结 四要素
+    - 时间节奏（10%）：时长是否合适、前后半段语速变化、是否慌张加速
 
     **请求参数**:
-    | 参数 | 类型 | 必填 | 说明 |
-    |------|------|------|------|
-    | audio_url | string | 是 | 音频文件URL |
-    | ref_text | string | 否 | 参考文本，用于SOE评测对照（不传则自由说模式） |
-    | topic | string | 否 | 陈述题目/话题，用于分析贴题性 |
-    | score_coeff | float | 否 | SOE评分苛刻指数：1.0(宽松)-4.0(严格)，默认1.0 |
-    | language | string | 否 | 语言，默认zh |
-    | message_id | string | 否 | 消息ID |
+    | 参数 | 类型 | 必填 | 默认值 | 说明 |
+    |------|------|------|--------|------|
+    | audio_url | string | 是 | - | 音频文件URL |
+    | ref_text | string | 否 | 空 | 参考文本，用于SOE对照。不传/空→eval_mode=3自由说；≤120字→eval_mode=2段落模式 |
+    | topic | string | 否 | - | 陈述题目/话题，传入后会分析贴题性并在overall_scores中返回topic_relevance_score |
+    | score_coeff | float | 否 | 1.0 | SOE评分苛刻指数：1.0(宽松) ~ 4.0(严格) |
+    | language | string | 否 | zh | 语言：zh中文、en英文 |
+    | message_id | string | 否 | 自动UUID | 消息ID |
 
     **Headers**:
     - X-Signature: AES加密签名（必填）
+
+    **Response 主要字段**:
+    | 字段 | 说明 |
+    |------|------|
+    | speech_text | ASR语音转写文本 |
+    | speech_rate | 语速（字/分钟） |
+    | speech_scores | SOE评分（pronunciation_accuracy/fluency/completion/suggested_score） |
+    | statistics | 评测统计（total_words/average_accuracy/low_score_count） |
+    | low_score_words | 低分字词列表（准确度<90分） |
+    | evaluation_report | AI评测报告JSON，结构见下方 |
+
+    **evaluation_report 结构**:
+    ```json
+    {
+        "viewpoint_analysis": {
+            "has_clear_viewpoint": true,
+            "viewpoint_summary": "核心观点概括",
+            "opening_type": "直接亮明观点/渐进引入/回避式开头/模糊开头",
+            "opening_quote": "开头原文前30字",
+            "evasion_signals": ["回避性表达列表"],
+            "score": 85,
+            "assessment": "观点表达评价"
+        },
+        "structure_completeness": {
+            "score": 80,
+            "has_viewpoint": true, "has_reason": true,
+            "has_example": false, "has_summary": true,
+            "structure_pattern": "观点→理由→总结（缺少举例）",
+            "missing_parts": ["举例支撑"],
+            "assessment": "结构完整度评价"
+        },
+        "logic_clarity": {
+            "score": 75,
+            "logic_jumps": [...],
+            "contradictions": [...],
+            "argument_piling": {"detected": false, "description": "..."},
+            "reasoning_chain": "论证链条描述",
+            "assessment": "逻辑清晰度评价"
+        },
+        "time_rhythm": {
+            "score": 70,
+            "total_duration_seconds": 58.5,
+            "duration_level": "适中",
+            "first_half_rate": 180, "second_half_rate": 220,
+            "rate_change": "加速",
+            "panic_acceleration": false,
+            "time_allocation": {"opening_seconds": 5, "body_seconds": 45, "closing_seconds": 8},
+            "assessment": "时间节奏评价"
+        },
+        "expression_redundancy": {
+            "score": 65,
+            "filler_words": [{"word": "然后", "count": 5}],
+            "total_filler_count": 8,
+            "filler_ratio": "每分钟8次",
+            "redundant_expressions": [...],
+            "effective_content_ratio": "75%",
+            "assessment": "表达冗余度评价"
+        },
+        "overall_scores": {
+            "overall_score": 78,
+            "viewpoint_score": 85, "structure_score": 80, "logic_score": 75,
+            "fluency_score": 80, "speech_rate_score": 75,
+            "expression_score": 65, "time_rhythm_score": 70,
+            "pronunciation_accuracy": 88.5, "pronunciation_fluency": 82.3,
+            "pronunciation_completion": 95.0, "suggested_score": 85.0,
+            "speech_rate_value": 195,
+            "speech_rate_level": "良好",
+            "level": "良好",
+            "one_sentence_comment": "观点鲜明但举例不足"
+        },
+        "structure_visualization": {
+            "arguments": ["论点1", "论点2"],
+            "conclusion": "结论要点"
+        },
+        "strengths": ["优点1", "优点2"],
+        "improvements": ["改进建议1", "改进建议2"],
+        "practice_tips": [{"dimension": "结构组织", "tip": "练习方法"}]
+    }
+    ```
     """
     # Verify signature from header
     verify_signature(x_signature)
@@ -2096,32 +2177,101 @@ async def evaluate_impromptu_reaction(
     """
     即兴反应评测接口（同步接口）。
 
-    传入音频URL，接口自动进行ASR语音识别和SOE发音评测，
-    再由混元AI针对"即兴反应"场景生成专项评测报告。
+    传入音频URL和场景/题目，接口自动进行ASR语音识别和SOE发音评测（eval_mode=3自由说），
+    再由混元AI针对"即兴反应"场景进行犀利、结构化的专项评测。
 
     **处理流程**:
     1. 下载音频文件
-    2. ASR语音识别（带时间戳）与 SOE发音评测 并行执行
-    3. 混元AI综合分析即兴反应表现
+    2. ASR语音识别（带时间戳）与 SOE发音评测（eval_mode=3自由说）并行执行
+    3. 混元AI综合分析即兴反应表现（含词级时间戳用于反应速度分析）
 
     **评测维度**:
-    - 反应速度：开口时间、思考停顿
-    - 内容相关性：是否切题、是否跑题
-    - 结构形成：是否有清晰的开头-主体-结尾
-    - 逻辑连贯度：论点之间的衔接
-    - 表达冗余度：口头禅、废话比例
+    - 反应速度：开口时间（基于时间戳）、慌乱信号、思考停顿
+    - 结构形成：前15秒内是否建立主线、结构信号词识别
+    - 内容相关性：是否切题、跑题部分识别
+    - 逻辑连贯度：思维跳跃、过渡质量
+    - 表达冗余度：口头禅统计、冗余度等级、有效内容占比
 
     **请求参数**:
-    | 参数 | 类型 | 必填 | 说明 |
-    |------|------|------|------|
-    | audio_url | string | 是 | 音频文件URL |
-    | scenario | string | 否 | 即兴反应场景/题目描述 |
-    | score_coeff | float | 否 | SOE评分苛刻指数：1.0(宽松)-4.0(严格)，默认3.5 |
-    | language | string | 否 | 语言，默认zh |
-    | message_id | string | 否 | 消息ID |
+    | 参数 | 类型 | 必填 | 默认值 | 说明 |
+    |------|------|------|--------|------|
+    | audio_url | string | 是 | - | 音频文件URL |
+    | scenario | string | 是 | - | 即兴反应的触发情境/题目 |
+    | score_coeff | float | 否 | 3.5 | SOE评分苛刻指数：1.0(宽松) ~ 4.0(严格) |
+    | language | string | 否 | zh | 语言：zh中文、en英文 |
+    | message_id | string | 否 | 自动UUID | 消息ID |
 
     **Headers**:
     - X-Signature: AES加密签名（必填）
+
+    **Response 主要字段**:
+    | 字段 | 说明 |
+    |------|------|
+    | speech_text | ASR语音转写文本 |
+    | speech_rate | 语速（字/分钟） |
+    | speech_scores | SOE评分（pronunciation_accuracy/fluency/completion/suggested_score） |
+    | statistics | 评测统计（total_words/average_accuracy/low_score_count） |
+    | low_score_words | 低分字词列表（准确度<90分） |
+    | evaluation_report | AI评测报告JSON，结构见下方 |
+
+    **evaluation_report 结构**:
+    ```json
+    {
+        "reaction_speed": {
+            "first_word_time_ms": 450,
+            "opening_speed": "果断开口/犹豫拖延/大量填充词起手",
+            "panic_signals": false,
+            "thinking_pauses": [
+                {"before_word": "我", "after_word": "认为", "pause_duration_ms": 1200, "position_time_ms": 3500}
+            ],
+            "assessment": "起步反应速度与情绪表现评价"
+        },
+        "structure_formation": {
+            "formed_in_15s": true,
+            "structure_signal": "我从两个方面来说",
+            "structure_pattern": "总分总",
+            "has_opening": true, "has_body": true, "has_closing": true,
+            "assessment": "结构形成评价"
+        },
+        "content_relevance": {
+            "topic_relevance": "紧扣主题/略微偏题/完全跑题",
+            "on_topic": true, "topic_drift": false,
+            "off_topic_parts": [],
+            "relevance_description": "相关性分析",
+            "assessment": "内容相关性评价"
+        },
+        "logic_coherence": {
+            "coherence_level": "流畅连贯/基本连贯/偶有跳跃/逻辑混乱",
+            "logic_jumps": [{"from_point": "...", "to_point": "...", "description": "..."}],
+            "transition_quality": "过渡质量评价",
+            "assessment": "逻辑连贯度评价"
+        },
+        "expression_redundancy": {
+            "filler_words": [{"word": "嗯", "count": 3}, {"word": "然后", "count": 5}],
+            "total_filler_count": 8,
+            "filler_ratio": "每分钟8次",
+            "redundancy_level": "极低/正常/偏高/极高",
+            "effective_content_ratio": "80%",
+            "assessment": "表达冗余度评价"
+        },
+        "overall_scores": {
+            "overall_score": 75,
+            "pronunciation_accuracy": 88.5, "pronunciation_fluency": 82.3,
+            "pronunciation_completion": 95.0, "suggested_score": 85.0,
+            "speech_rate_value": 195,
+            "speech_rate_level": "良好",
+            "level": "良好",
+            "one_sentence_comment": "反应迅速但主线略显松散"
+        },
+        "structure_visualization": {
+            "key_points": ["要点1", "要点2"],
+            "conclusion": "结论"
+        },
+        "strengths": ["优点1", "优点2"],
+        "improvements": ["改进建议1", "改进建议2"],
+        "next_action": "在开头先用一句话说清你的核心观点"
+    }
+    ```
     """
     # Verify signature from header
     verify_signature(x_signature)
