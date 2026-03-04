@@ -7,6 +7,9 @@ python-multipart>=0.0.6
 tencentcloud-sdk-python-common[async]
 tencentcloud-sdk-python-hunyuan
 
+# OpenAI SDK
+openai>=1.0.0
+
 # WebSocket (for SOE/ASR SDK)
 websocket-client>=1.6.0
 requests>=2.31.0
