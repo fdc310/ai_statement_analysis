@@ -2,12 +2,17 @@
 Tencent Cloud Hunyuan LLM service with async support.
 """
 import json
+import logging
+import asyncio
 from typing import Optional, AsyncGenerator
 
 from tencentcloud.hunyuan.v20230901 import hunyuan_client_async, models
+from tencentcloud.common.exception import TencentCloudSDKException
 
 from app.core.config import settings
 from app.services.tencent.base import TencentCloudClient
+
+logger = logging.getLogger(__name__)
 
 
 class HunyuanService(TencentCloudClient):
@@ -17,10 +22,12 @@ class HunyuanService(TencentCloudClient):
         self,
         secret_id: Optional[str] = None,
         secret_key: Optional[str] = None,
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        timeout: Optional[float] = None
     ):
         super().__init__(secret_id, secret_key, "hunyuan.tencentcloudapi.com")
         self.model = model or settings.hunyuan_model
+        self.timeout = timeout or settings.hunyuan_timeout
 
     def _create_async_client(self) -> hunyuan_client_async.HunyuanClient:
         """Create a new async Hunyuan client for each request."""
@@ -34,75 +41,135 @@ class HunyuanService(TencentCloudClient):
         messages: list[dict],
         temperature: float = 0.7,
         top_p: float = 0.9,
-        stream: bool = False
+        stream: bool = False,
+        timeout: Optional[float] = None
     ) -> dict:
         """Generate chat completion (async)."""
-        client = self._create_async_client()
+        timeout = timeout or self.timeout
+        logger.info(f"Starting chat request with model={self.model}, messages_count={len(messages)}, timeout={timeout}")
+        
+        try:
+            client = self._create_async_client()
 
-        req = models.ChatCompletionsRequest()
-        params = {
-            "Model": self.model,
-            "Messages": messages,
-            "Temperature": temperature,
-            "TopP": top_p,
-            "Stream": stream
-        }
-        req.from_json_string(json.dumps(params))
+            req = models.ChatCompletionsRequest()
+            params = {
+                "Model": self.model,
+                "Messages": messages,
+                "Temperature": temperature,
+                "TopP": top_p,
+                "Stream": stream
+            }
+            req.from_json_string(json.dumps(params))
 
-        async with client:
-            if stream:
-                response = await client.ChatCompletions(req)
-                return await self._handle_stream_response(response)
-            else:
-                response = await client.ChatCompletions(req)
-                result = json.loads(response.to_json_string())
-                return self._parse_chat_result(result)
+            async with client:
+                if stream:
+                    logger.info("Using streaming mode")
+                    response = await asyncio.wait_for(
+                        client.ChatCompletions(req),
+                        timeout=timeout
+                    )
+                    result = await self._handle_stream_response(response)
+                    logger.info(f"Stream completed, content_length={len(result.get('content', ''))}")
+                    return result
+                else:
+                    logger.info(f"Waiting for response (timeout={timeout}s)...")
+                    response = await asyncio.wait_for(
+                        client.ChatCompletions(req),
+                        timeout=timeout
+                    )
+                    result = json.loads(response.to_json_string())
+                    parsed = self._parse_chat_result(result)
+                    logger.info(f"Chat completed, content_length={len(parsed.get('content', ''))}, tokens={parsed.get('usage', {}).get('total_tokens', 0)}")
+                    return parsed
+                    
+        except asyncio.TimeoutError:
+            error_msg = f"Chat request timeout after {timeout} seconds"
+            logger.error(error_msg)
+            raise Exception(error_msg)
+        except TencentCloudSDKException as e:
+            error_msg = f"Tencent Cloud SDK error: {e}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
+        except Exception as e:
+            error_msg = f"Chat request failed: {type(e).__name__}: {e}"
+            logger.error(error_msg, exc_info=True)
+            raise
 
     async def chat_stream(
         self,
         messages: list[dict],
         temperature: float = 0.7,
-        top_p: float = 0.9
+        top_p: float = 0.9,
+        timeout: Optional[float] = None
     ) -> AsyncGenerator[str, None]:
         """Generate chat completion with streaming (async generator)."""
-        client = self._create_async_client()
+        timeout = timeout or self.timeout
+        logger.info(f"Starting stream request with model={self.model}, messages_count={len(messages)}, timeout={timeout}")
+        
+        try:
+            client = self._create_async_client()
 
-        req = models.ChatCompletionsRequest()
-        params = {
-            "Model": self.model,
-            "Messages": messages,
-            "Temperature": temperature,
-            "TopP": top_p,
-            "Stream": True
-        }
-        req.from_json_string(json.dumps(params))
+            req = models.ChatCompletionsRequest()
+            params = {
+                "Model": self.model,
+                "Messages": messages,
+                "Temperature": temperature,
+                "TopP": top_p,
+                "Stream": True
+            }
+            req.from_json_string(json.dumps(params))
 
-        async with client:
-            response = await client.ChatCompletions(req)
+            async with client:
+                response = await asyncio.wait_for(
+                    client.ChatCompletions(req),
+                    timeout=timeout
+                )
+                async for event in response:
+                    data = json.loads(event["data"])
+                    if "Choices" in data and len(data["Choices"]) > 0:
+                        delta = data["Choices"][0].get("Delta", {})
+                        content = delta.get("Content", "")
+                        if content:
+                            yield content
+                            
+            logger.info("Stream request completed")
+                            
+        except asyncio.TimeoutError:
+            error_msg = f"Stream request timeout after {timeout} seconds"
+            logger.error(error_msg)
+            raise Exception(error_msg)
+        except TencentCloudSDKException as e:
+            error_msg = f"Tencent Cloud SDK error in stream: {e}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
+        except Exception as e:
+            error_msg = f"Stream request failed: {type(e).__name__}: {e}"
+            logger.error(error_msg, exc_info=True)
+            raise
+
+    async def _handle_stream_response(self, response) -> dict:
+        """Handle streaming response and collect full content."""
+        logger.info("Processing stream response")
+        content_parts = []
+        try:
             async for event in response:
                 data = json.loads(event["data"])
                 if "Choices" in data and len(data["Choices"]) > 0:
                     delta = data["Choices"][0].get("Delta", {})
                     content = delta.get("Content", "")
                     if content:
-                        yield content
+                        content_parts.append(content)
 
-    async def _handle_stream_response(self, response) -> dict:
-        """Handle streaming response and collect full content."""
-        content_parts = []
-        async for event in response:
-            data = json.loads(event["data"])
-            if "Choices" in data and len(data["Choices"]) > 0:
-                delta = data["Choices"][0].get("Delta", {})
-                content = delta.get("Content", "")
-                if content:
-                    content_parts.append(content)
-
-        return {
-            "content": "".join(content_parts),
-            "usage": {},
-            "raw_response": None
-        }
+            result = {
+                "content": "".join(content_parts),
+                "usage": {},
+                "raw_response": None
+            }
+            logger.info(f"Stream response processed, content_length={len(result['content'])}")
+            return result
+        except Exception as e:
+            logger.error(f"Error processing stream response: {e}", exc_info=True)
+            raise
 
     def _parse_chat_result(self, result: dict) -> dict:
         """Parse chat completion result."""
