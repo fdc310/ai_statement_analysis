@@ -8,6 +8,7 @@ from typing import Optional, AsyncGenerator
 
 from tencentcloud.hunyuan.v20230901 import hunyuan_client_async, models
 from tencentcloud.common.exception import TencentCloudSDKException
+from openai import AsyncOpenAI
 
 from app.core.config import settings
 from app.services.tencent.base import TencentCloudClient
@@ -23,11 +24,22 @@ class HunyuanService(TencentCloudClient):
         secret_id: Optional[str] = None,
         secret_key: Optional[str] = None,
         model: Optional[str] = None,
-        timeout: Optional[float] = None
+        timeout: Optional[float] = None,
+        backend: str = "native",
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None
     ):
         super().__init__(secret_id, secret_key, "hunyuan.tencentcloudapi.com")
+        self.backend = backend
         self.model = model or settings.hunyuan_model
         self.timeout = timeout or settings.hunyuan_timeout
+        self._openai_client = None
+        if self.backend == "openai":
+            self._openai_client = AsyncOpenAI(
+                api_key=api_key or settings.openai_api_key,
+                base_url=base_url or settings.openai_base_url,
+                timeout=self.timeout
+            )
 
     def _create_async_client(self) -> hunyuan_client_async.HunyuanClient:
         """Create a new async Hunyuan client for each request."""
@@ -46,8 +58,11 @@ class HunyuanService(TencentCloudClient):
     ) -> dict:
         """Generate chat completion (async)."""
         timeout = timeout or self.timeout
-        logger.info(f"Starting chat request with model={self.model}, messages_count={len(messages)}, timeout={timeout}")
-        
+        logger.info(f"Starting chat request with model={self.model}, backend={self.backend}, messages_count={len(messages)}, timeout={timeout}")
+
+        if self.backend == "openai":
+            return await self._chat_openai(messages, temperature, top_p, stream, timeout)
+
         try:
             client = self._create_async_client()
 
@@ -104,8 +119,28 @@ class HunyuanService(TencentCloudClient):
     ) -> AsyncGenerator[str, None]:
         """Generate chat completion with streaming (async generator)."""
         timeout = timeout or self.timeout
-        logger.info(f"Starting stream request with model={self.model}, messages_count={len(messages)}, timeout={timeout}")
-        
+        logger.info(f"Starting stream request with model={self.model}, backend={self.backend}, messages_count={len(messages)}, timeout={timeout}")
+
+        if self.backend == "openai":
+            try:
+                response = await self._openai_client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                    top_p=top_p,
+                    stream=True,
+                    timeout=timeout
+                )
+                async for chunk in response:
+                    if chunk.choices[0].delta.content:
+                        yield chunk.choices[0].delta.content
+                logger.info("OpenAI stream request completed")
+            except Exception as e:
+                error_msg = f"OpenAI stream error: {type(e).__name__}: {e}"
+                logger.error(error_msg, exc_info=True)
+                raise
+            return
+
         try:
             client = self._create_async_client()
 
@@ -190,6 +225,63 @@ class HunyuanService(TencentCloudClient):
             },
             "raw_response": result
         }
+
+    async def _chat_openai(
+        self,
+        messages: list[dict],
+        temperature: float,
+        top_p: float,
+        stream: bool,
+        timeout: float
+    ) -> dict:
+        """Chat using OpenAI-compatible API."""
+        try:
+            if stream:
+                logger.info("Using OpenAI streaming mode")
+                response = await self._openai_client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                    top_p=top_p,
+                    stream=True,
+                    timeout=timeout
+                )
+                content_parts = []
+                async for chunk in response:
+                    if chunk.choices[0].delta.content:
+                        content_parts.append(chunk.choices[0].delta.content)
+                result = {
+                    "content": "".join(content_parts),
+                    "usage": {},
+                    "raw_response": None
+                }
+                logger.info(f"OpenAI stream completed, content_length={len(result['content'])}")
+                return result
+            else:
+                logger.info(f"Waiting for OpenAI response (timeout={timeout}s)...")
+                response = await self._openai_client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                    top_p=top_p,
+                    stream=False,
+                    timeout=timeout
+                )
+                result = {
+                    "content": response.choices[0].message.content,
+                    "usage": {
+                        "prompt_tokens": response.usage.prompt_tokens,
+                        "completion_tokens": response.usage.completion_tokens,
+                        "total_tokens": response.usage.total_tokens
+                    },
+                    "raw_response": response.model_dump()
+                }
+                logger.info(f"OpenAI chat completed, content_length={len(result['content'])}, tokens={result['usage'].get('total_tokens', 0)}")
+                return result
+        except Exception as e:
+            error_msg = f"OpenAI API error: {type(e).__name__}: {e}"
+            logger.error(error_msg, exc_info=True)
+            raise
 
     async def generate_evaluation(
         self,
@@ -2337,6 +2429,15 @@ SOE原始分直接填入评测返回数值。
         }
 
 
-# Singleton instance
-hunyuan_service = HunyuanService()
+# Singleton instance - backend determined by LLM_PROVIDER config
+if settings.llm_provider == "openai":
+    hunyuan_service = HunyuanService(
+        backend="openai",
+        model=settings.openai_model,
+        api_key=settings.openai_api_key,
+        base_url=settings.openai_base_url,
+        timeout=settings.hunyuan_timeout
+    )
+else:
+    hunyuan_service = HunyuanService()
 
