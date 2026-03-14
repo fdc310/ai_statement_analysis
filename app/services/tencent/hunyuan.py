@@ -124,10 +124,11 @@ class HunyuanService(TencentCloudClient):
         logger.info(f"Starting stream request with model={self.model}, backend={self.backend}, messages_count={len(messages)}, timeout={timeout}")
 
         if self.backend == "openai":
+            openai_messages = self._convert_messages_to_openai(messages)
             try:
                 response = await self._openai_client.chat.completions.create(
                     model=self.model,
-                    messages=messages,
+                    messages=openai_messages,
                     temperature=temperature,
                     top_p=top_p,
                     stream=True,
@@ -229,6 +230,17 @@ class HunyuanService(TencentCloudClient):
         }
 
 
+    @staticmethod
+    def _convert_messages_to_openai(messages: list[dict]) -> list[dict]:
+        """Convert Hunyuan format (Role/Content) to OpenAI format (role/content)."""
+        converted = []
+        for msg in messages:
+            converted.append({
+                "role": msg.get("Role", msg.get("role", "")),
+                "content": msg.get("Content", msg.get("content", ""))
+            })
+        return converted
+
     async def _chat_openai(
         self,
         messages: list[dict],
@@ -238,6 +250,7 @@ class HunyuanService(TencentCloudClient):
         timeout: float
     ) -> dict:
         """Chat using OpenAI-compatible API."""
+        messages = self._convert_messages_to_openai(messages)
         try:
             if stream:
                 logger.info("Using OpenAI streaming mode")
