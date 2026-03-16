@@ -1442,6 +1442,11 @@ Note:
         "transition_time": "<过渡时间描述>",
         "overall_assessment": "<整体事件分布评价>"
     },
+    "overall_score": {
+        "score": <综合评分0-100，综合结构完整性、逻辑连贯性、语言流畅度、事件分布等维度>,
+        "level": "<等级：优秀(85-100)/良好(70-84)/一般(55-69)/需改进(0-54)>",
+        "comment": "<一句话总结，不超过30字>"
+    },
     "improvements": [
         "<改进建议1>",
         "<改进建议2>",
@@ -1525,7 +1530,12 @@ Note:
                     "transition_time": "无法解析",
                     "overall_assessment": "无法解析AI响应"
                 },
-                "improvements": ["无法解析AI响应，请稍后重试"]
+                "improvements": ["无法解析AI响应，请稍后重试"],
+                "overall_score": {
+                    "score": 0,
+                    "level": "需改进",
+                    "comment": "无法解析AI响应"
+                }
             }
 
     async def analyze_tongue_twister_reading(

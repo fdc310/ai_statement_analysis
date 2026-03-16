@@ -383,6 +383,11 @@ class StoryReadingResponse(BaseModel):
         default_factory=list, description="待改进建议列表"
     )
 
+    # 综合评分
+    overall_score: Optional[dict] = Field(
+        None, description="综合评分（score/level/comment）"
+    )
+
     # ASR时间戳数据
     asr_data: Optional[dict] = Field(
         None, description="ASR识别结果（带时间戳）"

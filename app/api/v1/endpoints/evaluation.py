@@ -1445,6 +1445,7 @@ async def analyze_story_reading(
     - 逻辑连贯性：时间跳跃、因果错误、事件遗漏、逻辑矛盾
     - 语言流畅度：长停顿、重复修正、填充词、句子完整度
     - 事件分布：各事件的时间位置和时长
+    - 综合评分：基于各维度的综合打分
     - 待改进建议
 
     **功能特性**:
@@ -1539,6 +1540,11 @@ async def analyze_story_reading(
             "缺少事件3",
             "结尾仓促，无总结"
         ],
+        "overall_score": {
+            "score": 72,
+            "level": "良好",
+            "comment": "故事结构完整但高潮不足，结尾仓促"
+        },
         "asr_data": {
             "text": "识别的完整文本",
             "word_info_list": [
@@ -1592,6 +1598,7 @@ async def analyze_story_reading(
             fluency_analysis=analysis_result.get("fluency_analysis"),
             event_distribution=analysis_result.get("event_distribution"),
             improvements=analysis_result.get("improvements", []),
+            overall_score=analysis_result.get("overall_score"),
             asr_data={
                 "text": speech_text,
                 "word_info_list": word_info_list
