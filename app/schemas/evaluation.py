@@ -455,6 +455,12 @@ class TongueTwisterReadingResponse(BaseModel):
     practice_suggestions: List[str] = Field(
         default_factory=list, description="练习建议列表"
     )
+    speech_rate_analysis: Optional[dict] = Field(
+        None, description="语速分析（仅article模式，含整体语速、分段语速、快慢段落）"
+    )
+    pause_analysis: Optional[dict] = Field(
+        None, description="断句停顿分析（仅article模式，含正确停顿、不当停顿、遗漏停顿）"
+    )
 
     # ASR完整数据
     asr_data: Optional[dict] = Field(

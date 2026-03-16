@@ -1763,6 +1763,8 @@ async def evaluate_tongue_twister_reading(
             fluency_analysis=analysis_result.get("fluency_analysis"),
             overall_assessment=analysis_result.get("overall_assessment"),
             practice_suggestions=analysis_result.get("practice_suggestions", []),
+            speech_rate_analysis=analysis_result.get("speech_rate_analysis"),
+            pause_analysis=analysis_result.get("pause_analysis"),
             asr_data={
                 "text": speech_text,
                 "word_info_list": word_info_list
