@@ -270,6 +270,15 @@ async def evaluate_speech(
 
         # Extract results
         speech_text = asr_result.get("text", "")
+
+        if not speech_text or not speech_text.strip():
+            return EvaluationAcceptedResponse(
+                success=False,
+                message="音频内容为空，未识别到有效语音",
+                message_id=msg_id,
+                error="ASR returned empty text"
+            )
+
         scores_data = soe_result.get("scores", {})
         low_score_words_data = soe_result.get("low_score_words", [])
         statistics_data = soe_result.get("statistics", {})
@@ -407,6 +416,15 @@ async def evaluate_speech_upload(
 
         # Extract results
         speech_text = asr_result.get("text", "")
+
+        if not speech_text or not speech_text.strip():
+            return EvaluationAcceptedResponse(
+                success=False,
+                message="音频内容为空，未识别到有效语音",
+                message_id=msg_id,
+                error="ASR returned empty text"
+            )
+
         scores_data = soe_result.get("scores", {})
         low_score_words_data = soe_result.get("low_score_words", [])
         statistics_data = soe_result.get("statistics", {})
@@ -636,6 +654,15 @@ async def generate_report(
             engine_type = "16k_zh" if request.language == "zh" else "16k_en"
             asr_result = await asr_service.recognize_audio(audio_data, engine_type)
             speech_text = asr_result.get("text", "")
+
+        if not speech_text or not speech_text.strip():
+            return ReportResponse(
+                success=False,
+                message="音频内容为空，未识别到有效语音",
+                message_id=msg_id,
+                audio_url=audio_url,
+                error="ASR returned empty text"
+            )
 
         # Calculate speech rate if audio_duration provided
         speech_rate = None
@@ -903,6 +930,15 @@ async def generate_report_upload(
             engine_type = "16k_zh" if language == "zh" else "16k_en"
             asr_result = await asr_service.recognize_audio(audio_data, engine_type)
             text = asr_result.get("text", "")
+
+        if not text or not text.strip():
+            return ReportResponse(
+                success=False,
+                message="音频内容为空，未识别到有效语音",
+                message_id=msg_id,
+                audio_url="",
+                error="ASR returned empty text"
+            )
 
         # Calculate speech rate if audio_duration provided
         speech_rate = None
@@ -1574,6 +1610,14 @@ async def analyze_story_reading(
         speech_text = asr_result.get("text", "")
         word_info_list = asr_result.get("word_info_list", [])
 
+        if not speech_text or not speech_text.strip():
+            return StoryReadingResponse(
+                success=False,
+                message="音频内容为空，未识别到有效语音",
+                message_id=msg_id,
+                error="ASR returned empty text"
+            )
+
         # Calculate audio duration from word timestamps
         audio_duration = None
         if word_info_list:
@@ -1713,6 +1757,14 @@ async def evaluate_tongue_twister_reading(
         # Extract ASR results
         speech_text = asr_result.get("text", "")
         word_info_list = asr_result.get("word_info_list", [])
+
+        if not speech_text or not speech_text.strip():
+            return TongueTwisterReadingResponse(
+                success=False,
+                message="音频内容为空，未识别到有效语音",
+                message_id=msg_id,
+                error="ASR returned empty text"
+            )
 
         # Extract SOE results
         scores_data = soe_result.get("scores", {})
@@ -1893,6 +1945,14 @@ async def voice_chat(
 
         speech_text = asr_result.get("text", "")
         word_info_list = asr_result.get("word_info_list", [])
+
+        if not speech_text or not speech_text.strip():
+            return VoiceChatResponse(
+                success=False,
+                message="音频内容为空，未识别到有效语音",
+                message_id=msg_id,
+                error="ASR returned empty text"
+            )
 
         # 2. Build conversation messages for Hunyuan
         # Determine system prompt: custom > scene preset > default
@@ -2102,6 +2162,15 @@ async def generate_opinion_statement_report(
         # 3. Extract ASR results
         speech_text = asr_result.get("text", "")
         word_info_list = asr_result.get("word_info_list", [])
+
+        if not speech_text or not speech_text.strip():
+            return OpinionStatementResponse(
+                success=False,
+                message="音频内容为空，未识别到有效语音",
+                message_id=msg_id,
+                audio_url=audio_url,
+                error="ASR returned empty text"
+            )
 
         # 4. Extract SOE results
         scores_data = soe_result.get("scores", {})
@@ -2315,6 +2384,15 @@ async def evaluate_impromptu_reaction(
         # 3. Extract ASR results
         speech_text = asr_result.get("text", "")
         word_info_list = asr_result.get("word_info_list", [])
+
+        if not speech_text or not speech_text.strip():
+            return ImpromptuReactionResponse(
+                success=False,
+                message="音频内容为空，未识别到有效语音",
+                message_id=msg_id,
+                audio_url=audio_url,
+                error="ASR returned empty text"
+            )
 
         # 4. Extract SOE results
         scores_data = soe_result.get("scores", {})
