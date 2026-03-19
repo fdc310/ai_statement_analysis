@@ -93,9 +93,9 @@ async def synthesize_speech(
     ```json
     {
         "success": true,
-        "url": "http://s3dev.fzfengzhi.cn/public/...",
-        "object_key": "liaoyu/upload/tts/...",
-        "size": 12345
+        "url": "https://liaoyu-public.oss-cn-beijing.aliyuncs.com/upload/...",
+        "fileName": "tts_xxx.mp3",
+        "ossId": "123456"
     }
     ```
     """
@@ -126,9 +126,8 @@ async def synthesize_speech(
     return {
         "success": True,
         "url": result["url"],
-        "object_key": result.get("object_key"),
-        "bucket": result.get("bucket"),
-        "size": result.get("size")
+        "fileName": result.get("fileName"),
+        "ossId": result.get("ossId")
     }
 
 
@@ -151,9 +150,9 @@ async def synthesize_speech_get(
     ```json
     {
         "success": true,
-        "url": "http://s3dev.fzfengzhi.cn/public/...",
-        "object_key": "liaoyu/upload/tts/...",
-        "size": 12345
+        "url": "https://liaoyu-public.oss-cn-beijing.aliyuncs.com/upload/...",
+        "fileName": "tts_xxx.mp3",
+        "ossId": "123456"
     }
     ```
     """
@@ -184,9 +183,8 @@ async def synthesize_speech_get(
     return {
         "success": True,
         "url": result["url"],
-        "object_key": result.get("object_key"),
-        "bucket": result.get("bucket"),
-        "size": result.get("size")
+        "fileName": result.get("fileName"),
+        "ossId": result.get("ossId")
     }
 
 

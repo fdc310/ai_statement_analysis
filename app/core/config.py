@@ -54,6 +54,11 @@ class Settings(BaseSettings):
     s3_prefix: str = os.getenv("S3_PREFIX", "")
     s3_secure: bool = os.getenv("S3_SECURE", "false").lower() == "true"
 
+    # Upload Config
+    # upload_mode: "oss" = MinIO直传OSS, "api" = POST接口上传
+    upload_mode: str = os.getenv("UPLOAD_MODE", "api")
+    upload_api_url: str = os.getenv("UPLOAD_API_URL", "")
+
     class Config:
         env_file = ".env"
         case_sensitive = False
