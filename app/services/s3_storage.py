@@ -50,11 +50,13 @@ class S3StorageService:
         self.secure = secure if secure is not None else settings.s3_secure
 
         # 初始化MinIO客户端
+        # 阿里云OSS需要指定region，避免MinIO自动调用GetBucketLocation被403
         self.client = Minio(
             self.endpoint,
             access_key=self.access_key,
             secret_key=self.secret_key,
-            secure=self.secure
+            secure=self.secure,
+            region="oss-cn-beijing"
         )
 
     def _generate_object_name(
