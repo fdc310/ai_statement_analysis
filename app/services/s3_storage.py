@@ -32,7 +32,8 @@ class S3StorageService:
         prefix: Optional[str] = None,
         secure: Optional[bool] = None,
         upload_mode: Optional[str] = None,
-        upload_api_url: Optional[str] = None
+        upload_api_url: Optional[str] = None,
+        public_url: Optional[str] = None
     ):
         self.endpoint = endpoint or settings.s3_endpoint
         if self.endpoint.startswith(("http://", "https://")):
@@ -47,6 +48,10 @@ class S3StorageService:
         # 上传模式: "oss" = MinIO直传, "api" = POST接口上传
         self.upload_mode = upload_mode or settings.upload_mode
         self.upload_api_url = upload_api_url or settings.upload_api_url
+
+        # 访问域名（阿里云OSS操作域名和访问域名不同）
+        # 例如: https://liaoyu-public.oss-cn-beijing.aliyuncs.com
+        self.public_url = public_url or settings.s3_public_url
 
         # 初始化MinIO客户端（oss模式或需要list/delete等操作时使用）
         # 阿里云OSS需要指定region，避免MinIO自动调用GetBucketLocation被403
@@ -86,6 +91,17 @@ class S3StorageService:
         if subfolder:
             return f"{self.prefix}/{subfolder}/{filename}"
         return f"{self.prefix}/{filename}"
+
+    def _generate_oss_id(self) -> str:
+        """生成19位纯数字ID"""
+        return str(uuid.uuid4().int)[:19]
+
+    def _build_public_url(self, object_name: str) -> str:
+        """生成访问URL，优先使用配置的公共访问域名"""
+        if self.public_url:
+            return f"{self.public_url.rstrip('/')}/{object_name}"
+        protocol = "https" if self.secure else "http"
+        return f"{protocol}://{self.bucket_name}.{self.endpoint}/{object_name}"
 
     def _format_result(self, success: bool, url: str = None, file_name: str = None,
                         oss_id: str = None, error: str = None) -> dict:
@@ -188,11 +204,10 @@ class S3StorageService:
                 content_type=content_type
             )
 
-            protocol = "https" if self.secure else "http"
-            public_url = f"{protocol}://{self.bucket_name}.{self.endpoint}/{object_name}"
+            public_url = self._build_public_url(object_name)
             file_name = os.path.basename(object_name)
 
-            return self._format_result(True, url=public_url, file_name=file_name)
+            return self._format_result(True, url=public_url, file_name=file_name, oss_id=self._generate_oss_id())
 
         except S3Error as e:
             return self._format_result(False, error=f"MinIO错误: {str(e)}")
@@ -225,11 +240,10 @@ class S3StorageService:
                 content_type=content_type
             )
 
-            protocol = "https" if self.secure else "http"
-            public_url = f"{protocol}://{self.bucket_name}.{self.endpoint}/{full_object_name}"
+            public_url = self._build_public_url(full_object_name)
             file_name = os.path.basename(file_path)
 
-            return self._format_result(True, url=public_url, file_name=file_name)
+            return self._format_result(True, url=public_url, file_name=file_name, oss_id=self._generate_oss_id())
 
         except S3Error as e:
             return self._format_result(False, error=f"MinIO错误: {str(e)}")
@@ -341,13 +355,11 @@ class S3StorageService:
             )
 
             result = []
-            protocol = "https" if self.secure else "http"
             for obj in objects:
                 result.append({
-                    "key": obj.object_name,
-                    "size": obj.size,
-                    "last_modified": obj.last_modified,
-                    "url": f"{protocol}://{self.bucket_name}.{self.endpoint}/{obj.object_name}"
+                    "url": self._build_public_url(obj.object_name),
+                    "fileName": os.path.basename(obj.object_name),
+                    "ossId": self._generate_oss_id()
                 })
 
             return result

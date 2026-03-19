@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     s3_bucket_name: str = os.getenv("S3_BUCKET_NAME", "")
     s3_prefix: str = os.getenv("S3_PREFIX", "")
     s3_secure: bool = os.getenv("S3_SECURE", "false").lower() == "true"
+    s3_public_url: str = os.getenv("S3_PUBLIC_URL", "")
 
     # Upload Config
     # upload_mode: "oss" = MinIO直传OSS, "api" = POST接口上传
