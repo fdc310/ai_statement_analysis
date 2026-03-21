@@ -84,6 +84,8 @@ app.add_middleware(
 
 # Include API v1 router
 app.include_router(api_router, prefix="/api/v1")
+# 兼容小程序端多了一层 /api 前缀的情况
+app.include_router(api_router, prefix="/api/api/v1")
 
 
 @app.get("/")
