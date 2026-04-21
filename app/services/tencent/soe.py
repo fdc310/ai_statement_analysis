@@ -1,9 +1,13 @@
 """
 Tencent Cloud SOE (Smart Oral Evaluation) service using WebSocket SDK.
+Supports fallback: recording mode -> streaming mode -> error.
 """
 import asyncio
 import sys
 import os
+import threading
+import time
+import logging
 from typing import Optional
 
 # Add SDK path to sys.path
@@ -16,6 +20,13 @@ from soe.speaking_assessment import SpeakingAssessment, SpeakingAssessmentListen
 
 from app.core.config import settings
 from app.services.tencent.audio import convert_audio_to_wav
+
+logger = logging.getLogger(__name__)
+
+# 16kHz 16bit mono WAV: 1秒 = 32000字节
+BYTES_PER_SEC = 32000
+CHUNK_DURATION = 0.2  # 200ms per chunk for streaming mode
+STREAM_CHUNK_SIZE = int(BYTES_PER_SEC * CHUNK_DURATION)  # 6400 bytes
 
 
 class SOEService:
@@ -40,132 +51,164 @@ class SOEService:
             bit_depth=16
         )
 
-    def _sync_evaluate(
-        self,
-        audio_data: bytes,
-        ref_text: str,
-        eval_mode: int,
-        score_coeff: float,
-        server_type: int
-    ) -> dict:
-        """Synchronous evaluation using WebSocket SDK."""
-        import threading
-        import time
-        import logging
+    def _wait_for_open(self, recognizer, timeout: float = 10.0) -> Optional[str]:
+        """Wait for WebSocket to open. Returns error string or None on success."""
+        wait_time = 0
+        while recognizer.status == 1:  # STARTED
+            time.sleep(0.1)
+            wait_time += 0.1
+            if wait_time > timeout:
+                return f"Connection timeout after {wait_time:.1f}s"
+        if recognizer.status != 2:  # OPENED
+            return f"Connection not opened, status={recognizer.status}"
+        return None
 
-        logger = logging.getLogger(__name__)
+    def _build_recognizer(self, audio_data: bytes, ref_text: str, eval_mode: int,
+                          score_coeff: float, server_type: int, rec_mode: int,
+                          listener: SpeakingAssessmentListener) -> SpeakingAssessment:
+        """Create and configure a SpeakingAssessment recognizer."""
+        engine_type = "16k_zh" if server_type == 0 else "16k_en"
+        recognizer = SpeakingAssessment(
+            self.appid, Credential(self.secret_id, self.secret_key), engine_type, listener
+        )
+        recognizer.set_text_mode(0)
+        recognizer.set_ref_text(ref_text)
+        recognizer.set_eval_mode(eval_mode)
+        recognizer.set_keyword("")
+        recognizer.set_sentence_info_enabled(1)
+        recognizer.set_voice_format(1)  # 1=wav format
+        recognizer.set_rec_mode(rec_mode)
+        recognizer.score_coeff = score_coeff
+        return recognizer
 
-        # Use threading.Event instead of asyncio.Event for sync context
+    def _send_audio(self, recognizer, audio_data: bytes, chunk_size: int, interval: float) -> Optional[str]:
+        """Send audio data. Returns error string or None on success."""
+        total_size = len(audio_data)
+        send_start = time.time()
+        for i in range(0, total_size, chunk_size):
+            if recognizer.status != 2:  # OPENED
+                return f"Connection lost during send, status={recognizer.status}, sent={i}/{total_size}"
+            chunk = audio_data[i:i + chunk_size]
+            recognizer.write(chunk)
+            sent = min(i + chunk_size, total_size)
+            if sent == total_size or sent % (BYTES_PER_SEC * 3) == 0:
+                logger.info(f"SOE: sent {sent}/{total_size} bytes ({sent * 100 // total_size}%)")
+            if interval > 0:
+                time.sleep(interval)
+        send_elapsed = time.time() - send_start
+        logger.info(f"SOE: audio data sent in {send_elapsed:.2f}s")
+        return None
+
+    def _wait_result(self, completed_event: threading.Event, result_holder: dict,
+                     recognizer, timeout: float = 60.0) -> dict:
+        """Wait for recognition result. Returns SDK response dict or error dict."""
+        if not completed_event.wait(timeout=timeout):
+            return {"error": "Evaluation timeout"}
+        if result_holder["error"]:
+            return {"error": result_holder["error"]}
+        return result_holder["result"] or {}
+
+    def _do_evaluate(self, audio_data: bytes, ref_text: str, eval_mode: int,
+                     score_coeff: float, server_type: int, rec_mode: int,
+                     chunk_size: int, send_interval: float, mode_name: str) -> dict:
+        """Run a single evaluation attempt with the given rec_mode."""
         completed_event = threading.Event()
         result_holder = {"result": None, "error": None}
 
-        class SyncListener(SpeakingAssessmentListener):
+        class EvalListener(SpeakingAssessmentListener):
             def on_recognition_start(self, response):
-                logger.info(f"SOE: recognition started, voice_id={response.get('voice_id')}")
+                logger.info(f"SOE [{mode_name}]: recognition started, voice_id={response.get('voice_id')}")
 
             def on_intermediate_result(self, response):
-                logger.debug(f"SOE: intermediate result received")
                 result_holder["result"] = response
 
             def on_recognition_complete(self, response):
-                logger.info(f"SOE: recognition complete")
+                logger.info(f"SOE [{mode_name}]: recognition complete")
                 result_holder["result"] = response
                 completed_event.set()
 
             def on_fail(self, response):
-                logger.error(f"SOE: recognition failed, code={response.get('code')}, message={response.get('message')}")
+                logger.error(f"SOE [{mode_name}]: failed, code={response.get('code')}, message={response.get('message')}")
                 result_holder["error"] = response
                 completed_event.set()
 
-        listener = SyncListener()
-        credential = Credential(self.secret_id, self.secret_key)
+        listener = EvalListener()
+        recognizer = self._build_recognizer(audio_data, ref_text, eval_mode, score_coeff, server_type, rec_mode, listener)
 
-        # Engine type: 16k_zh for Chinese, 16k_en for English
-        engine_type = "16k_zh" if server_type == 0 else "16k_en"
-
-        recognizer = SpeakingAssessment(
-            self.appid, credential, engine_type, listener
-        )
-
-        # Configure evaluation parameters based on API docs
-        recognizer.set_text_mode(0)  # 0=普通文本
-        recognizer.set_ref_text(ref_text)
-        recognizer.set_eval_mode(eval_mode)  # 3=自由说模式
-        recognizer.set_keyword("")
-        recognizer.set_sentence_info_enabled(1)  # 输出断句中间结果
-        recognizer.set_voice_format(1)  # 1=wav format
-        recognizer.set_rec_mode(0)  # 0=流式识别模式，分块发送音频
-        recognizer.score_coeff = score_coeff  # 评价苛刻指数 1.0-4.0
-
-        logger.info(f"SOE: starting evaluation, audio_size={len(audio_data)} bytes, "
-                     f"engine={engine_type}, eval_mode={eval_mode}, ref_text_len={len(ref_text)}")
+        logger.info(f"SOE [{mode_name}]: starting, audio_size={len(audio_data)} bytes, rec_mode={rec_mode}")
 
         try:
-            # Start WebSocket connection
             recognizer.start()
-            logger.info(f"SOE: recognizer.start() called, initial status={recognizer.status}")
 
-            # Wait for connection to be opened (status changes from STARTED to OPENED)
-            wait_time = 0
-            while recognizer.status == 1:  # STARTED = 1
-                time.sleep(0.1)
-                wait_time += 0.1
-                if wait_time > 10:
-                    logger.error(f"SOE: connection timeout after {wait_time:.1f}s, status={recognizer.status}")
-                    try:
-                        recognizer.ws.close()
-                    except:
-                        pass
-                    return {"error": "Connection timeout"}
+            err = self._wait_for_open(recognizer)
+            if err:
+                logger.error(f"SOE [{mode_name}]: {err}")
+                return {"error": err}
 
-            logger.info(f"SOE: wait loop exited after {wait_time:.1f}s, status={recognizer.status}")
+            err = self._send_audio(recognizer, audio_data, chunk_size, send_interval)
+            if err:
+                logger.error(f"SOE [{mode_name}]: {err}")
+                return {"error": err}
 
-            # Check if connection is open
-            if recognizer.status != 2:  # OPENED = 2
-                logger.error(f"SOE: connection not opened, status={recognizer.status}")
-                try:
-                    recognizer.ws.close()
-                except:
-                    pass
-                return {"error": f"Connection failed, status: {recognizer.status}"}
-
-            # Send audio data in chunks for streaming mode (rec_mode=0)
-            chunk_size = 64 * 1024  # 64KB per chunk
-            total_size = len(audio_data)
-            logger.info(f"SOE: sending audio data, size={total_size} bytes, chunk_size={chunk_size}")
-            send_start = time.time()
-            for i in range(0, total_size, chunk_size):
-                chunk = audio_data[i:i + chunk_size]
-                recognizer.write(chunk)
-                sent = min(i + chunk_size, total_size)
-                if sent == total_size or sent % (512 * 1024) == 0:
-                    logger.info(f"SOE: sent {sent}/{total_size} bytes ({sent * 100 // total_size}%)")
-            send_elapsed = time.time() - send_start
-            logger.info(f"SOE: audio data sent in {send_elapsed:.2f}s")
-
-            # Call stop() to send end message - SDK's stop() sends {"type": "end"}
             recognizer.stop()
-            logger.info("SOE: stop() called, waiting for result...")
+            logger.info(f"SOE [{mode_name}]: stop() called, waiting for result...")
 
-            # Wait for result with timeout
-            if not completed_event.wait(timeout=60):
-                logger.error("SOE: evaluation timeout after 60s")
-                return {"error": "Evaluation timeout"}
-
-            logger.info("SOE: completed_event set, evaluation finished")
+            return self._wait_result(completed_event, result_holder, recognizer)
 
         except Exception as e:
-            logger.exception(f"SOE: exception during evaluation: {e}")
+            logger.exception(f"SOE [{mode_name}]: exception: {e}")
             try:
                 recognizer.ws.close()
             except:
                 pass
             return {"error": str(e)}
 
-        if result_holder["error"]:
-            return {"error": result_holder["error"].get("message", "Unknown error")}
+    def _sync_evaluate(self, audio_data: bytes, ref_text: str, eval_mode: int,
+                       score_coeff: float, server_type: int) -> dict:
+        """
+        Evaluate with fallback: recording mode -> streaming mode -> error.
+        - Recording mode (rec_mode=1): single packet, fast but fails on large audio.
+        - Streaming mode (rec_mode=0): chunked send with rate limiting, slower but reliable.
+        """
+        total_size = len(audio_data)
+        logger.info(f"SOE: starting evaluation, audio_size={total_size} bytes, eval_mode={eval_mode}")
 
-        return result_holder["result"] or {}
+        # Attempt 1: Recording mode (rec_mode=1), send all at once
+        logger.info("SOE: attempt 1 - recording mode (rec_mode=1)")
+        result = self._do_evaluate(
+            audio_data, ref_text, eval_mode, score_coeff, server_type,
+            rec_mode=1,
+            chunk_size=total_size,  # send all at once
+            send_interval=0,
+            mode_name="recording"
+        )
+
+        # Check if recording mode succeeded (SDK response has no "error" key on success)
+        if "error" not in result:
+            return result
+
+        err = result["error"]
+        error_msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+        logger.warning(f"SOE: recording mode failed ({error_msg}), falling back to streaming mode")
+
+        # Attempt 2: Streaming mode (rec_mode=0), chunked with rate limiting
+        logger.info("SOE: attempt 2 - streaming mode (rec_mode=0)")
+        result = self._do_evaluate(
+            audio_data, ref_text, eval_mode, score_coeff, server_type,
+            rec_mode=0,
+            chunk_size=STREAM_CHUNK_SIZE,
+            send_interval=CHUNK_DURATION,
+            mode_name="streaming"
+        )
+
+        if "error" not in result:
+            return result
+
+        # Both modes failed
+        err = result["error"]
+        error_msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+        logger.error(f"SOE: all attempts failed, last error: {error_msg}")
+        return result
 
     async def evaluate_audio(
         self,
@@ -202,13 +245,14 @@ class SOEService:
         )
 
         if "error" in result:
-            raise Exception(result["error"])
+            err = result["error"]
+            msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+            raise Exception(msg)
 
         return self._parse_evaluation_result(result)
 
     def _parse_evaluation_result(self, result: dict) -> dict:
         """Parse and structure the evaluation result from WebSocket SDK."""
-        # The result structure from WebSocket SDK is different
         soe_result = result.get("result", {})
 
         pron_accuracy = soe_result.get("PronAccuracy", 0)
