@@ -51,6 +51,9 @@ class SOEService:
         """Synchronous evaluation using WebSocket SDK."""
         import threading
         import time
+        import logging
+
+        logger = logging.getLogger(__name__)
 
         # Use threading.Event instead of asyncio.Event for sync context
         completed_event = threading.Event()
@@ -58,16 +61,19 @@ class SOEService:
 
         class SyncListener(SpeakingAssessmentListener):
             def on_recognition_start(self, response):
-                pass
+                logger.info(f"SOE: recognition started, voice_id={response.get('voice_id')}")
 
             def on_intermediate_result(self, response):
+                logger.debug(f"SOE: intermediate result received")
                 result_holder["result"] = response
 
             def on_recognition_complete(self, response):
+                logger.info(f"SOE: recognition complete")
                 result_holder["result"] = response
                 completed_event.set()
 
             def on_fail(self, response):
+                logger.error(f"SOE: recognition failed, code={response.get('code')}, message={response.get('message')}")
                 result_holder["error"] = response
                 completed_event.set()
 
@@ -88,12 +94,16 @@ class SOEService:
         recognizer.set_keyword("")
         recognizer.set_sentence_info_enabled(1)  # 输出断句中间结果
         recognizer.set_voice_format(1)  # 1=wav format
-        recognizer.set_rec_mode(1)  # 1=录音识别模式，一次性发送音频
+        recognizer.set_rec_mode(0)  # 0=流式识别模式，分块发送音频
         recognizer.score_coeff = score_coeff  # 评价苛刻指数 1.0-4.0
+
+        logger.info(f"SOE: starting evaluation, audio_size={len(audio_data)} bytes, "
+                     f"engine={engine_type}, eval_mode={eval_mode}, ref_text_len={len(ref_text)}")
 
         try:
             # Start WebSocket connection
             recognizer.start()
+            logger.info(f"SOE: recognizer.start() called, initial status={recognizer.status}")
 
             # Wait for connection to be opened (status changes from STARTED to OPENED)
             wait_time = 0
@@ -101,31 +111,51 @@ class SOEService:
                 time.sleep(0.1)
                 wait_time += 0.1
                 if wait_time > 10:
+                    logger.error(f"SOE: connection timeout after {wait_time:.1f}s, status={recognizer.status}")
                     try:
                         recognizer.ws.close()
                     except:
                         pass
                     return {"error": "Connection timeout"}
 
+            logger.info(f"SOE: wait loop exited after {wait_time:.1f}s, status={recognizer.status}")
+
             # Check if connection is open
             if recognizer.status != 2:  # OPENED = 2
+                logger.error(f"SOE: connection not opened, status={recognizer.status}")
                 try:
                     recognizer.ws.close()
                 except:
                     pass
                 return {"error": f"Connection failed, status: {recognizer.status}"}
 
-            # Send all audio data at once in recording mode
-            recognizer.write(audio_data)
+            # Send audio data in chunks for streaming mode (rec_mode=0)
+            chunk_size = 64 * 1024  # 64KB per chunk
+            total_size = len(audio_data)
+            logger.info(f"SOE: sending audio data, size={total_size} bytes, chunk_size={chunk_size}")
+            send_start = time.time()
+            for i in range(0, total_size, chunk_size):
+                chunk = audio_data[i:i + chunk_size]
+                recognizer.write(chunk)
+                sent = min(i + chunk_size, total_size)
+                if sent == total_size or sent % (512 * 1024) == 0:
+                    logger.info(f"SOE: sent {sent}/{total_size} bytes ({sent * 100 // total_size}%)")
+            send_elapsed = time.time() - send_start
+            logger.info(f"SOE: audio data sent in {send_elapsed:.2f}s")
 
             # Call stop() to send end message - SDK's stop() sends {"type": "end"}
             recognizer.stop()
+            logger.info("SOE: stop() called, waiting for result...")
 
             # Wait for result with timeout
             if not completed_event.wait(timeout=60):
+                logger.error("SOE: evaluation timeout after 60s")
                 return {"error": "Evaluation timeout"}
 
+            logger.info("SOE: completed_event set, evaluation finished")
+
         except Exception as e:
+            logger.exception(f"SOE: exception during evaluation: {e}")
             try:
                 recognizer.ws.close()
             except:
