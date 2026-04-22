@@ -210,14 +210,23 @@ class HunyuanService(TencentCloudClient):
             raise
 
     def _parse_chat_result(self, result: dict) -> dict:
-        """Parse chat completion result."""
-        choices = result.get("Choices", [])
+        """Parse chat completion result. Handles both direct and Response-wrapped formats."""
+        # Hunyuan API may wrap the result in {"Response": {...}}
+        data = result.get("Response", result)
+
+        choices = data.get("Choices", [])
         content = ""
         if choices:
             message = choices[0].get("Message", {})
             content = message.get("Content", "")
 
-        usage = result.get("Usage", {})
+        usage = data.get("Usage", {})
+
+        logger.info(f"API response parsed, content_length={len(content)}, "
+                     f"tokens={usage.get('TotalTokens', 0)}")
+        if content:
+            preview = content[:500] + ("..." if len(content) > 500 else "")
+            logger.debug(f"API raw content: {preview}")
 
         return {
             "content": content,
@@ -228,6 +237,52 @@ class HunyuanService(TencentCloudClient):
             },
             "raw_response": result
         }
+
+    @staticmethod
+    def _extract_json(content: str):
+        """
+        Extract JSON from AI response content.
+        Handles: markdown code blocks (```json ... ```), plain JSON, extra text around JSON.
+        """
+        import re
+
+        preview = content[:500] + ("..." if len(content) > 500 else "")
+        logger.info(f"Extracting JSON from content, length={len(content)}")
+        logger.debug(f"Raw content: {preview}")
+
+        # Try to extract from markdown code block first
+        code_block_match = re.search(r'```(?:json)?\s*\n?([\s\S]*?)\n?\s*```', content)
+        if code_block_match:
+            try:
+                result = json.loads(code_block_match.group(1).strip())
+                logger.info("JSON extracted from markdown code block")
+                return result
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse markdown code block content as JSON: {e}")
+
+        # Try to find JSON object
+        json_match = re.search(r'\{[\s\S]*\}', content)
+        if json_match:
+            try:
+                result = json.loads(json_match.group())
+                logger.info("JSON extracted from object pattern")
+                return result
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse extracted object as JSON: {e}")
+
+        # Try to find JSON array
+        array_match = re.search(r'\[[\s\S]*\]', content)
+        if array_match:
+            try:
+                result = json.loads(array_match.group())
+                logger.info("JSON extracted from array pattern")
+                return result
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse extracted array as JSON: {e}")
+
+        # Last resort: try parsing the whole content
+        logger.warning("No JSON pattern matched, attempting to parse raw content")
+        return json.loads(content)
 
 
     @staticmethod
@@ -656,13 +711,9 @@ class HunyuanService(TencentCloudClient):
 
         # 解析 JSON
         try:
-            # 尝试从响应中提取 JSON
-            import re
-            json_match = re.search(r'\{[\s\S]*\}', content)
-            if json_match:
-                return json.loads(json_match.group())
-            return json.loads(content)
-        except json.JSONDecodeError:
+            return self._extract_json(content)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse AI response as JSON: {e}, content={content[:300]}")
             # 如果解析失败，返回默认结构
             return {
                 "speech_rate": {
@@ -779,12 +830,9 @@ class HunyuanService(TencentCloudClient):
 
         # 解析 JSON
         try:
-            import re
-            json_match = re.search(r'\{[\s\S]*\}', content)
-            if json_match:
-                return json.loads(json_match.group())
-            return json.loads(content)
-        except json.JSONDecodeError:
+            return self._extract_json(content)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse AI response as JSON: {e}, content={content[:300]}")
             # 如果解析失败，返回默认结构
             return {
                 "logic_completeness": {
@@ -1524,12 +1572,9 @@ Note:
 
         # Parse JSON
         try:
-            import re
-            json_match = re.search(r'\{[\s\S]*\}', content)
-            if json_match:
-                return json.loads(json_match.group())
-            return json.loads(content)
-        except json.JSONDecodeError:
+            return self._extract_json(content)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse AI response as JSON: {e}, content={content[:300]}")
             # Return default structure if parsing fails
             return {
                 "structure_analysis": {
@@ -1646,12 +1691,9 @@ Note:
 
         # Parse JSON
         try:
-            import re
-            json_match = re.search(r'\{[\s\S]*\}', content)
-            if json_match:
-                return json.loads(json_match.group())
-            return json.loads(content)
-        except json.JSONDecodeError:
+            return self._extract_json(content)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse AI response as JSON: {e}, content={content[:300]}")
             if eval_type == "article":
                 return self._default_article_result()
             return self._default_tongue_twister_result()
@@ -2051,12 +2093,9 @@ Note:
 
         # 解析 JSON
         try:
-            import re
-            json_match = re.search(r'\{[\s\S]*\}', content)
-            if json_match:
-                return json.loads(json_match.group())
-            return json.loads(content)
-        except json.JSONDecodeError:
+            return self._extract_json(content)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse AI response as JSON: {e}, content={content[:300]}")
             return self._default_opinion_statement_result(audio_duration)
 
     def _build_opinion_statement_system_prompt(self, language: str, has_topic: bool) -> str:
@@ -2456,12 +2495,9 @@ SOE原始分(pronunciation_accuracy/fluency/completion/suggested_score)直接填
 
         # 解析 JSON
         try:
-            import re
-            json_match = re.search(r'\{[\s\S]*\}', content)
-            if json_match:
-                return json.loads(json_match.group())
-            return json.loads(content)
-        except json.JSONDecodeError:
+            return self._extract_json(content)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse AI response as JSON: {e}, content={content[:300]}")
             return self._default_impromptu_reaction_result(audio_duration)
 
     def _build_impromptu_reaction_system_prompt(self, language: str, has_scenario: bool) -> str:
