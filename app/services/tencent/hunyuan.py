@@ -2,12 +2,18 @@
 Tencent Cloud Hunyuan LLM service with async support.
 """
 import json
+import logging
+import asyncio
 from typing import Optional, AsyncGenerator
 
 from tencentcloud.hunyuan.v20230901 import hunyuan_client_async, models
+from tencentcloud.common.exception import TencentCloudSDKException
+from openai import AsyncOpenAI
 
 from app.core.config import settings
 from app.services.tencent.base import TencentCloudClient
+
+logger = logging.getLogger(__name__)
 
 
 class HunyuanService(TencentCloudClient):
@@ -17,10 +23,24 @@ class HunyuanService(TencentCloudClient):
         self,
         secret_id: Optional[str] = None,
         secret_key: Optional[str] = None,
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        timeout: Optional[float] = None,
+        backend: str = "native",
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None
     ):
         super().__init__(secret_id, secret_key, "hunyuan.tencentcloudapi.com")
+        self.backend = backend
         self.model = model or settings.hunyuan_model
+        self.timeout = timeout or settings.hunyuan_timeout
+        self._openai_client = None
+        if self.backend == "openai":
+            self._openai_client = AsyncOpenAI(
+                api_key=api_key or settings.openai_api_key,
+                base_url=base_url or settings.openai_base_url,
+                timeout=self.timeout
+            )
+
 
     def _create_async_client(self) -> hunyuan_client_async.HunyuanClient:
         """Create a new async Hunyuan client for each request."""
@@ -29,90 +49,184 @@ class HunyuanService(TencentCloudClient):
             self._get_credential(), "ap-guangzhou", self._get_client_profile()
         )
 
+
     async def chat(
         self,
         messages: list[dict],
         temperature: float = 0.7,
         top_p: float = 0.9,
-        stream: bool = False
+        stream: bool = False,
+        timeout: Optional[float] = None
     ) -> dict:
         """Generate chat completion (async)."""
-        client = self._create_async_client()
+        timeout = timeout or self.timeout
+        logger.info(f"Starting chat request with model={self.model}, backend={self.backend}, messages_count={len(messages)}, timeout={timeout}")
 
-        req = models.ChatCompletionsRequest()
-        params = {
-            "Model": self.model,
-            "Messages": messages,
-            "Temperature": temperature,
-            "TopP": top_p,
-            "Stream": stream
-        }
-        req.from_json_string(json.dumps(params))
+        if self.backend == "openai":
+            return await self._chat_openai(messages, temperature, top_p, stream, timeout)
 
-        async with client:
-            if stream:
-                response = await client.ChatCompletions(req)
-                return await self._handle_stream_response(response)
-            else:
-                response = await client.ChatCompletions(req)
-                result = json.loads(response.to_json_string())
-                return self._parse_chat_result(result)
+        try:
+            client = self._create_async_client()
+
+            req = models.ChatCompletionsRequest()
+            params = {
+                "Model": self.model,
+                "Messages": messages,
+                "Temperature": temperature,
+                "TopP": top_p,
+                "Stream": stream
+            }
+            req.from_json_string(json.dumps(params))
+
+            async with client:
+                if stream:
+                    logger.info("Using streaming mode")
+                    response = await asyncio.wait_for(
+                        client.ChatCompletions(req),
+                        timeout=timeout
+                    )
+                    result = await self._handle_stream_response(response)
+                    logger.info(f"Stream completed, content_length={len(result.get('content', ''))}")
+                    return result
+                else:
+                    logger.info(f"Waiting for response (timeout={timeout}s)...")
+                    response = await asyncio.wait_for(
+                        client.ChatCompletions(req),
+                        timeout=timeout
+                    )
+                    result = json.loads(response.to_json_string())
+                    parsed = self._parse_chat_result(result)
+                    logger.info(f"Chat completed, content_length={len(parsed.get('content', ''))}, tokens={parsed.get('usage', {}).get('total_tokens', 0)}")
+                    return parsed
+                    
+        except asyncio.TimeoutError:
+            error_msg = f"Chat request timeout after {timeout} seconds"
+            logger.error(error_msg)
+            raise Exception(error_msg)
+        except TencentCloudSDKException as e:
+            error_msg = f"Tencent Cloud SDK error: {e}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
+        except Exception as e:
+            error_msg = f"Chat request failed: {type(e).__name__}: {e}"
+            logger.error(error_msg, exc_info=True)
+            raise
 
     async def chat_stream(
         self,
         messages: list[dict],
         temperature: float = 0.7,
-        top_p: float = 0.9
+        top_p: float = 0.9,
+        timeout: Optional[float] = None
     ) -> AsyncGenerator[str, None]:
         """Generate chat completion with streaming (async generator)."""
-        client = self._create_async_client()
+        timeout = timeout or self.timeout
+        logger.info(f"Starting stream request with model={self.model}, backend={self.backend}, messages_count={len(messages)}, timeout={timeout}")
 
-        req = models.ChatCompletionsRequest()
-        params = {
-            "Model": self.model,
-            "Messages": messages,
-            "Temperature": temperature,
-            "TopP": top_p,
-            "Stream": True
-        }
-        req.from_json_string(json.dumps(params))
+        if self.backend == "openai":
+            openai_messages = self._convert_messages_to_openai(messages)
+            try:
+                response = await self._openai_client.chat.completions.create(
+                    model=self.model,
+                    messages=openai_messages,
+                    temperature=temperature,
+                    top_p=top_p,
+                    stream=True,
+                    timeout=timeout
+                )
+                async for chunk in response:
+                    if chunk.choices[0].delta.content:
+                        yield chunk.choices[0].delta.content
+                logger.info("OpenAI stream request completed")
+            except Exception as e:
+                error_msg = f"OpenAI stream error: {type(e).__name__}: {e}"
+                logger.error(error_msg, exc_info=True)
+                raise
+            return
 
-        async with client:
-            response = await client.ChatCompletions(req)
+        try:
+            client = self._create_async_client()
+
+            req = models.ChatCompletionsRequest()
+            params = {
+                "Model": self.model,
+                "Messages": messages,
+                "Temperature": temperature,
+                "TopP": top_p,
+                "Stream": True
+            }
+            req.from_json_string(json.dumps(params))
+
+            async with client:
+                response = await asyncio.wait_for(
+                    client.ChatCompletions(req),
+                    timeout=timeout
+                )
+                async for event in response:
+                    data = json.loads(event["data"])
+                    if "Choices" in data and len(data["Choices"]) > 0:
+                        delta = data["Choices"][0].get("Delta", {})
+                        content = delta.get("Content", "")
+                        if content:
+                            yield content
+                            
+            logger.info("Stream request completed")
+                            
+        except asyncio.TimeoutError:
+            error_msg = f"Stream request timeout after {timeout} seconds"
+            logger.error(error_msg)
+            raise Exception(error_msg)
+        except TencentCloudSDKException as e:
+            error_msg = f"Tencent Cloud SDK error in stream: {e}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
+        except Exception as e:
+            error_msg = f"Stream request failed: {type(e).__name__}: {e}"
+            logger.error(error_msg, exc_info=True)
+            raise
+
+    async def _handle_stream_response(self, response) -> dict:
+        """Handle streaming response and collect full content."""
+        logger.info("Processing stream response")
+        content_parts = []
+        try:
             async for event in response:
                 data = json.loads(event["data"])
                 if "Choices" in data and len(data["Choices"]) > 0:
                     delta = data["Choices"][0].get("Delta", {})
                     content = delta.get("Content", "")
                     if content:
-                        yield content
+                        content_parts.append(content)
 
-    async def _handle_stream_response(self, response) -> dict:
-        """Handle streaming response and collect full content."""
-        content_parts = []
-        async for event in response:
-            data = json.loads(event["data"])
-            if "Choices" in data and len(data["Choices"]) > 0:
-                delta = data["Choices"][0].get("Delta", {})
-                content = delta.get("Content", "")
-                if content:
-                    content_parts.append(content)
-
-        return {
-            "content": "".join(content_parts),
-            "usage": {},
-            "raw_response": None
-        }
+            result = {
+                "content": "".join(content_parts),
+                "usage": {},
+                "raw_response": None
+            }
+            logger.info(f"Stream response processed, content_length={len(result['content'])}")
+            return result
+        except Exception as e:
+            logger.error(f"Error processing stream response: {e}", exc_info=True)
+            raise
 
     def _parse_chat_result(self, result: dict) -> dict:
-        """Parse chat completion result."""
-        choices = result.get("Choices", [])
+        """Parse chat completion result. Handles both direct and Response-wrapped formats."""
+        # Hunyuan API may wrap the result in {"Response": {...}}
+        data = result.get("Response", result)
+
+        choices = data.get("Choices", [])
         content = ""
         if choices:
             message = choices[0].get("Message", {})
             content = message.get("Content", "")
 
-        usage = result.get("Usage", {})
+        usage = data.get("Usage", {})
+
+        logger.info(f"API response parsed, content_length={len(content)}, "
+                     f"tokens={usage.get('TotalTokens', 0)}")
+        if content:
+            preview = content[:500] + ("..." if len(content) > 500 else "")
+            logger.debug(f"API raw content: {preview}")
 
         return {
             "content": content,
@@ -123,6 +237,122 @@ class HunyuanService(TencentCloudClient):
             },
             "raw_response": result
         }
+
+    @staticmethod
+    def _extract_json(content: str):
+        """
+        Extract JSON from AI response content.
+        Handles: markdown code blocks (```json ... ```), plain JSON, extra text around JSON.
+        """
+        import re
+
+        preview = content[:500] + ("..." if len(content) > 500 else "")
+        logger.info(f"Extracting JSON from content, length={len(content)}")
+        logger.debug(f"Raw content: {preview}")
+
+        # Try to extract from markdown code block first
+        code_block_match = re.search(r'```(?:json)?\s*\n?([\s\S]*?)\n?\s*```', content)
+        if code_block_match:
+            try:
+                result = json.loads(code_block_match.group(1).strip())
+                logger.info("JSON extracted from markdown code block")
+                return result
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse markdown code block content as JSON: {e}")
+
+        # Try to find JSON object
+        json_match = re.search(r'\{[\s\S]*\}', content)
+        if json_match:
+            try:
+                result = json.loads(json_match.group())
+                logger.info("JSON extracted from object pattern")
+                return result
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse extracted object as JSON: {e}")
+
+        # Try to find JSON array
+        array_match = re.search(r'\[[\s\S]*\]', content)
+        if array_match:
+            try:
+                result = json.loads(array_match.group())
+                logger.info("JSON extracted from array pattern")
+                return result
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse extracted array as JSON: {e}")
+
+        # Last resort: try parsing the whole content
+        logger.warning("No JSON pattern matched, attempting to parse raw content")
+        return json.loads(content)
+
+
+    @staticmethod
+    def _convert_messages_to_openai(messages: list[dict]) -> list[dict]:
+        """Convert Hunyuan format (Role/Content) to OpenAI format (role/content)."""
+        converted = []
+        for msg in messages:
+            converted.append({
+                "role": msg.get("Role", msg.get("role", "")),
+                "content": msg.get("Content", msg.get("content", ""))
+            })
+        return converted
+
+    async def _chat_openai(
+        self,
+        messages: list[dict],
+        temperature: float,
+        top_p: float,
+        stream: bool,
+        timeout: float
+    ) -> dict:
+        """Chat using OpenAI-compatible API."""
+        messages = self._convert_messages_to_openai(messages)
+        try:
+            if stream:
+                logger.info("Using OpenAI streaming mode")
+                response = await self._openai_client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                    top_p=top_p,
+                    stream=True,
+                    timeout=timeout
+                )
+                content_parts = []
+                async for chunk in response:
+                    if chunk.choices[0].delta.content:
+                        content_parts.append(chunk.choices[0].delta.content)
+                result = {
+                    "content": "".join(content_parts),
+                    "usage": {},
+                    "raw_response": None
+                }
+                logger.info(f"OpenAI stream completed, content_length={len(result['content'])}")
+                return result
+            else:
+                logger.info(f"Waiting for OpenAI response (timeout={timeout}s)...")
+                response = await self._openai_client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                    top_p=top_p,
+                    stream=False,
+                    timeout=timeout
+                )
+                result = {
+                    "content": response.choices[0].message.content,
+                    "usage": {
+                        "prompt_tokens": response.usage.prompt_tokens,
+                        "completion_tokens": response.usage.completion_tokens,
+                        "total_tokens": response.usage.total_tokens
+                    },
+                    "raw_response": response.model_dump()
+                }
+                logger.info(f"OpenAI chat completed, content_length={len(result['content'])}, tokens={result['usage'].get('total_tokens', 0)}")
+                return result
+        except Exception as e:
+            error_msg = f"OpenAI API error: {type(e).__name__}: {e}"
+            logger.error(error_msg, exc_info=True)
+            raise
 
     async def generate_evaluation(
         self,
@@ -481,13 +711,9 @@ class HunyuanService(TencentCloudClient):
 
         # 解析 JSON
         try:
-            # 尝试从响应中提取 JSON
-            import re
-            json_match = re.search(r'\{[\s\S]*\}', content)
-            if json_match:
-                return json.loads(json_match.group())
-            return json.loads(content)
-        except json.JSONDecodeError:
+            return self._extract_json(content)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse AI response as JSON: {e}, content={content[:300]}")
             # 如果解析失败，返回默认结构
             return {
                 "speech_rate": {
@@ -604,12 +830,9 @@ class HunyuanService(TencentCloudClient):
 
         # 解析 JSON
         try:
-            import re
-            json_match = re.search(r'\{[\s\S]*\}', content)
-            if json_match:
-                return json.loads(json_match.group())
-            return json.loads(content)
-        except json.JSONDecodeError:
+            return self._extract_json(content)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse AI response as JSON: {e}, content={content[:300]}")
             # 如果解析失败，返回默认结构
             return {
                 "logic_completeness": {
@@ -1267,6 +1490,15 @@ Note:
         "transition_time": "<过渡时间描述>",
         "overall_assessment": "<整体事件分布评价>"
     },
+    "overall_score": {
+        "structure_score": <结构完整性得分0-30>,
+        "logic_score": <逻辑连贯性得分0-25>,
+        "fluency_score": <语言流畅度得分0-25>,
+        "distribution_score": <事件分布得分0-20>,
+        "score": <综合评分=以上四项之和，0-100>,
+        "level": "<等级：优秀(85-100)/良好(70-84)/一般(55-69)/需改进(0-54)>",
+        "comment": "<一句话总结，不超过30字>"
+    },
     "improvements": [
         "<改进建议1>",
         "<改进建议2>",
@@ -1281,6 +1513,30 @@ Note:
 4. 事件分布：根据时间戳分析各事件的时长和分布
 5. 待改进：给出具体可行的改进建议
 
+评分规则（满分100分，各维度权重如下）：
+- 结构完整性（30分）：
+  * 有完整的开头、发展、高潮、结尾各得7-8分
+  * 缺少开头扣7分，缺少发展扣8分，缺少高潮扣8分，缺少结尾扣7分
+  * 结尾仓促或开头不完整各扣3-5分
+  * 注意：很多故事本身可能没有明显的高潮结构（如日常叙事、简单描述类故事），此时不应因"缺少高潮"而扣分，应根据故事类型合理判断
+- 逻辑连贯性（25分）：
+  * 每处时间跳跃扣3分，因果错误扣4分，事件遗漏扣3分，逻辑矛盾扣5分
+  * 与原文对比，遗漏关键情节每处扣3-5分
+- 语言流畅度（25分）：
+  * 每处长停顿(>3秒)扣2分，重复修正每次扣1分，填充词每3个扣1分
+  * 句子完整度低于80%额外扣5分
+- 事件分布（20分）：
+  * 事件时间分配严重不均匀扣5-10分
+  * 某段事件过于冗长或过于简略各扣3-5分
+
+重要评分原则：
+- 严格对照原始故事文本评估用户阅读内容的完整度和准确度
+- 如果用户阅读内容明显缺少原文中的关键段落或情节，必须在结构和逻辑维度体现扣分
+- 如果用户只读了故事的一部分就结束，不能给高分，应根据完成比例合理扣分
+- 不要因为用户"读得流利"就忽视内容缺失的问题，内容完整性比流畅度更重要
+- 满分(100分)仅在结构完整、逻辑无误、流畅自然、分布合理时才给出
+- 一般水平的阅读应在55-75分区间，只有真正优秀的表现才能超过85分
+
 时间戳分析规则：
 - 长停顿：相邻词语间隔超过3000ms（3秒），需要记录每处长停顿的前后词语、停顿时长和发生时间点
 - 重复修正：相同或相似词语在短时间内重复出现
@@ -1290,7 +1546,8 @@ Note:
 - 只输出纯JSON，不要添加markdown代码块标记
 - 如果无法从时间戳数据中分析某些指标，给出合理推断
 - 改进建议要具体、可操作
-- 事件分布要根据时间戳分析，如果没有明确事件划分，根据内容合理划分"""
+- 事件分布要根据时间戳分析，如果没有明确事件划分，根据内容合理划分
+- 评分必须与各维度的扣分点一致，不能各维度都有问题但总分很高"""
 
         user_prompt = f"""请分析以下用户的故事阅读表现：
 
@@ -1315,12 +1572,9 @@ Note:
 
         # Parse JSON
         try:
-            import re
-            json_match = re.search(r'\{[\s\S]*\}', content)
-            if json_match:
-                return json.loads(json_match.group())
-            return json.loads(content)
-        except json.JSONDecodeError:
+            return self._extract_json(content)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse AI response as JSON: {e}, content={content[:300]}")
             # Return default structure if parsing fails
             return {
                 "structure_analysis": {
@@ -1350,7 +1604,12 @@ Note:
                     "transition_time": "无法解析",
                     "overall_assessment": "无法解析AI响应"
                 },
-                "improvements": ["无法解析AI响应，请稍后重试"]
+                "improvements": ["无法解析AI响应，请稍后重试"],
+                "overall_score": {
+                    "score": 0,
+                    "level": "需改进",
+                    "comment": "无法解析AI响应"
+                }
             }
 
     async def analyze_tongue_twister_reading(
@@ -1432,12 +1691,9 @@ Note:
 
         # Parse JSON
         try:
-            import re
-            json_match = re.search(r'\{[\s\S]*\}', content)
-            if json_match:
-                return json.loads(json_match.group())
-            return json.loads(content)
-        except json.JSONDecodeError:
+            return self._extract_json(content)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse AI response as JSON: {e}, content={content[:300]}")
             if eval_type == "article":
                 return self._default_article_result()
             return self._default_tongue_twister_result()
@@ -1837,12 +2093,9 @@ Note:
 
         # 解析 JSON
         try:
-            import re
-            json_match = re.search(r'\{[\s\S]*\}', content)
-            if json_match:
-                return json.loads(json_match.group())
-            return json.loads(content)
-        except json.JSONDecodeError:
+            return self._extract_json(content)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse AI response as JSON: {e}, content={content[:300]}")
             return self._default_opinion_statement_result(audio_duration)
 
     def _build_opinion_statement_system_prompt(self, language: str, has_topic: bool) -> str:
@@ -2195,6 +2448,388 @@ SOE原始分(pronunciation_accuracy/fluency/completion/suggested_score)直接填
             "practice_tips": []
         }
 
+    async def generate_impromptu_reaction_report(
+        self,
+        speech_text: str,
+        speech_scores: dict,
+        low_score_words: Optional[list] = None,
+        statistics: Optional[dict] = None,
+        scenario: Optional[str] = None,
+        speech_rate: Optional[float] = None,
+        audio_duration: Optional[float] = None,
+        word_info_list: Optional[list] = None,
+        language: str = "zh"
+    ) -> dict:
+        """
+        生成即兴反应评测报告（JSON格式）
 
-# Singleton instance
-hunyuan_service = HunyuanService()
+        评测维度：反应速度、内容相关性、结构形成、逻辑连贯度、表达冗余度
+
+        Args:
+            speech_text: 语音转写文本
+            speech_scores: SOE评分数据
+            low_score_words: 低分字词列表
+            statistics: 评测统计数据
+            scenario: 即兴反应场景/题目
+            speech_rate: 语速（字/分钟）
+            audio_duration: 音频时长（秒）
+            word_info_list: ASR词级时间戳数据
+            language: 语言
+
+        Returns:
+            JSON格式的评测报告
+        """
+        system_prompt = self._build_impromptu_reaction_system_prompt(language, scenario is not None)
+        user_prompt = self._build_impromptu_reaction_user_prompt(
+            speech_text, speech_scores, low_score_words, statistics,
+            scenario, speech_rate, audio_duration, word_info_list, language
+        )
+
+        messages = [
+            {"Role": "system", "Content": system_prompt},
+            {"Role": "user", "Content": user_prompt}
+        ]
+
+        result = await self.chat(messages, temperature=0.3)
+        content = result["content"]
+
+        # 解析 JSON
+        try:
+            return self._extract_json(content)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse AI response as JSON: {e}, content={content[:300]}")
+            return self._default_impromptu_reaction_result(audio_duration)
+
+    def _build_impromptu_reaction_system_prompt(self, language: str, has_scenario: bool) -> str:
+        """构建即兴反应评测的系统提示词"""
+        rate_unit = "字/分钟" if language == "zh" else "词/分钟"
+
+        scenario_field = ""
+        if has_scenario:
+            scenario_field = '"scenario_relevance_score": <切题性评分0-100>,'
+
+        return f"""你是一名资深的即兴演讲与沟通教练，评分严格、标准高。你的任务是针对"即兴反应"场景，结合用户的发言转写和语音词级时间戳，进行专业、犀利、结构化的评测。
+
+## 核心评测原则（必须遵守）
+
+### 1. 区分"回应"与"复述"
+即兴反应的本质是对场景/题目做出自己的回应。你必须严格区分：
+- **有效回应**：用自己的话对场景做出反应、评价、共情、建议、延伸等，包含原创观点或情感回应
+- **无效复述**：只是重复、朗读或转述场景题目本身，没有自己的观点
+- **如果用户的发言内容与场景题目高度重叠（相似度>60%），说明用户只是在复述题目而非回应，内容相关性应直接判定为0-20分**
+
+### 2. 内容实质性要求
+即兴反应需要有实质内容，不能只是简单的一两句话：
+- 音频时长<10秒且无实质性观点表达：内容相关性上限50分，结构上限30分
+- 音频时长<20秒且内容单薄：内容相关性上限70分
+- 有效内容字数<30字：逻辑连贯度上限50分（内容太少无法体现逻辑）
+
+### 3. 评分分布校准（严格执行）
+- 85分以上（优秀）：只给真正出色的表现——结构清晰、内容有深度、表达流畅、有独到见解
+- 70-84分（良好）：整体不错但有明显可改进之处
+- 55-69分（一般）：大多数普通表现应落在此区间
+- 55分以下（需改进）：有明显缺陷
+- **绝对禁止对平庸表现给出85分以上的高分。宁可偏严，不可偏松**
+
+你必须严格按照以下JSON格式输出，不要添加任何额外内容，只输出JSON：
+
+{{
+    "reaction_speed": {{
+        "first_word_time_ms": <第一个词出现的时间戳毫秒>,
+        "opening_speed": "<起步判断：果断开口/犹豫拖延/大量填充词起手>",
+        "panic_signals": <是否存在明显慌乱(如语速突变、结巴、大量"嗯""啊")，true/false>,
+        "thinking_pauses": [
+            {{
+                "before_word": "<停顿前的词语>",
+                "after_word": "<停顿后的词语>",
+                "pause_duration_ms": <停顿时长毫秒>,
+                "position_time_ms": <停顿发生的时间点毫秒>
+            }}
+        ],
+        "assessment": "<起步反应速度与情绪表现的详细评价>"
+    }},
+    "structure_formation": {{
+        "formed_in_15s": <是否在开场(约前15秒)内建立主线结构，true/false>,
+        "structure_signal": "<结构信号词，如'我会从两个方面说'、'首先其次'等，若无则写'无明确结构信号'>",
+        "structure_pattern": "<实际表现出的结构，如'总分总'、'并列式'、'无序散发'>",
+        "has_opening": <是否有开头，true/false>,
+        "has_body": <是否有主体论述，true/false>,
+        "has_closing": <是否有结尾，true/false>,
+        "assessment": "<结构形成速度和清晰度的犀利评价>"
+    }},
+    "content_relevance": {{
+        "topic_relevance": "<切题度判定：紧扣主题/略微偏题/完全跑题/复述题目未作回应>",
+        "is_mere_repetition": <用户是否只是复述/朗读了场景题目而非做出回应，true/false>,
+        "repetition_ratio": "<与场景题目的文字重叠比例估算，如'90%'、'30%'、'0%'>",
+        "has_original_response": <是否包含用户自己的原创回应内容（观点、共情、建议等），true/false>,
+        "on_topic": <是否切题，true/false>,
+        "topic_drift": <是否跑题，true/false>,
+        "off_topic_parts": ["<跑题的部分内容>"],
+        "content_depth": "<内容深度：有独到见解/有基本论述/内容单薄/几乎无内容>",
+        "relevance_description": "<相关性描述，分析回答是否紧扣场景，是否有实质性回应>",
+        "assessment": "<内容相关性评价，如果是复述题目必须明确指出>"
+    }},
+    "logic_coherence": {{
+        "coherence_level": "<连贯程度：流畅连贯/基本连贯/偶有跳跃/逻辑混乱/内容不足无法判断>",
+        "logic_jumps": [
+            {{
+                "from_point": "<跳跃前的内容>",
+                "to_point": "<跳跃后的内容>",
+                "description": "<思维跳跃或话题中断的具体表现>"
+            }}
+        ],
+        "transition_quality": "<过渡质量评价>",
+        "assessment": "<逻辑连贯性与切题度的犀利评价>"
+    }},
+    "expression_redundancy": {{
+        "filler_words": [
+            {{"word": "<嗯/啊/然后/就是说等口头禅>", "count": <出现次数>}}
+        ],
+        "total_filler_count": <口头禅总出现次数>,
+        "filler_ratio": "<废话比例描述>",
+        "redundancy_level": "<冗余度判定：极低/正常/偏高/极高>",
+        "effective_content_ratio": "<有效内容占比估算>",
+        "assessment": "<表达流畅度及填充词比例的犀利评价>"
+    }},
+    "overall_scores": {{
+        "overall_score": <综合评分0-100，加权：反应速度25%+内容相关性25%+逻辑连贯度20%+流畅度15%+表达精炼度10%+结构形成5%>,
+        "reaction_speed_score": <反应速度评分0-100>,
+        "content_relevance_score": <内容相关性评分0-100>,
+        "logic_coherence_score": <逻辑连贯度评分0-100>,
+        "fluency_score": <流畅度评分0-100，基于SOE发音流利度数据>,
+        "expression_score": <表达精炼度评分0-100>,
+        "structure_score": <结构形成评分0-100>,
+        {scenario_field}
+        "pronunciation_accuracy": <SOE发音准确度原始分>,
+        "pronunciation_fluency": <SOE发音流利度原始分>,
+        "pronunciation_completion": <SOE发音完整度原始分>,
+        "suggested_score": <SOE综合建议分>,
+        "speech_rate_value": <语速数值>,
+        "speech_rate_level": "<优秀/良好/一般/较差>",
+        "level": "<等级：优秀(85-100)/良好(70-84)/一般(55-69)/需改进(0-54)>",
+        "one_sentence_comment": "<一句话总结，如：你只是复述了题目，需要加入自己的回应，不超过30字>"
+    }},
+    "structure_visualization": {{
+        "key_points": ["<要点1>", "<要点2>", "<要点3>"],
+        "conclusion": "<结论或总结>"
+    }},
+    "strengths": ["<优点1，不少于15字>", "<优点2>"],
+    "improvements": ["<改进建议1，具体可操作>", "<改进建议2>"],
+    "next_action": "<【下一次只改一件事】给出唯一且最具操作性的改进建议，如：在开头先说清主线>"
+}}
+
+评分标准：
+1. 反应速度(25%)：
+   - 90-100: 果断开口(<500ms)，无慌乱信号，思考停顿少
+   - 70-89: 短暂思考(500-1500ms)，停顿适度，情绪稳定
+   - 50-69: 明显犹豫(1500-3000ms)或大量填充词起手，停顿较多
+   - 0-49: 长时间沉默(>3000ms)或明显慌乱(语速突变、频繁结巴)
+
+2. 内容相关性(25%)：
+   - 90-100: 紧扣场景，有实质性原创回应，内容有深度和独到见解
+   - 70-89: 基本切题，有自己的回应但深度一般
+   - 50-69: 部分相关但内容单薄，或有明显跑题
+   - 30-49: 严重跑题或答非所问，内容空洞
+   - 0-29: 只是复述/朗读题目，完全没有自己的回应；或完全无关内容
+   **特别注意：如果用户只是复述了场景题目本身（包括读题、背题），而没有加入自己的观点、共情、建议或任何原创回应，该项最高不超过20分**
+
+3. 逻辑连贯度(20%)：
+   - 90-100: 逻辑流畅，论点递进清晰，过渡自然，无跳跃
+   - 70-89: 基本连贯，偶有小跳跃
+   - 50-69: 连贯性一般，跳跃明显或话题中断
+   - 30-49: 逻辑混乱或内容过少无法体现逻辑
+   - 0-29: 完全无逻辑可言
+
+4. 流畅度(15%)：基于SOE发音流利度数据评定
+
+5. 表达精炼度(10%)：
+   - 90-100: 无口头禅，表达干练，每句话都有信息量
+   - 70-89: 偶有口头禅，基本精炼
+   - 50-69: 较多口头禅或冗余表达
+   - 0-49: 大量废话，严重干扰
+
+6. 结构形成(5%)：
+   - 90-100: 前15秒内建立主线，结构信号明确，开头-主体-结尾完整
+   - 70-89: 有基本结构，但形成较慢或不够清晰
+   - 50-69: 结构模糊，无明确信号词
+   - 0-49: 无明显结构，全程无序散发
+   **注意：音频时长<10秒的发言，结构分上限40分（时长不足以展开结构）**
+
+评测要求：
+- 严格评分：不要给"还行""差不多"的表现高分，85分以上只留给真正优秀的表现
+- 识别复述：如果用户只是读了一遍题目，必须在assessment中明确指出，并大幅扣分
+- 客观且犀利：不回避问题，直指核心缺陷
+- 具体化：引用原文内容，给出具体例子
+- 操作性：改进建议要具体可执行
+- next_action必须是唯一且最关键的一个改进点
+
+注意：
+- 只输出纯JSON，不要添加markdown代码块标记
+- 所有评分都是0-100分
+- 反应速度分析需基于时间戳数据
+- 结构形成速度重点看前15秒
+- 综合评分overall_score必须严格按加权公式计算，不能凭感觉给分"""
+
+    def _build_impromptu_reaction_user_prompt(
+        self,
+        speech_text: str,
+        speech_scores: dict,
+        low_score_words: Optional[list] = None,
+        statistics: Optional[dict] = None,
+        scenario: Optional[str] = None,
+        speech_rate: Optional[float] = None,
+        audio_duration: Optional[float] = None,
+        word_info_list: Optional[list] = None,
+        language: str = "zh"
+    ) -> str:
+        """构建即兴反应评测的用户提示词"""
+        rate_unit = "字/分钟" if language == "zh" else "词/分钟"
+        prompt = f"""请评测以下即兴反应表现：
+
+## 语音转文字内容
+
+{speech_text}
+
+## 语音评分数据（SOE）
+
+- 发音准确度: {speech_scores.get('pronunciation_accuracy', 0)}分
+- 发音流利度: {speech_scores.get('pronunciation_fluency', 0)}分
+- 发音完整度: {speech_scores.get('pronunciation_completion', 0)}分
+- 综合建议分: {speech_scores.get('suggested_score', 0)}分
+
+## 时间与语速信息
+
+- 音频时长: {audio_duration or 0:.1f} 秒
+- 语速: {speech_rate or 0} {rate_unit}
+"""
+
+        if scenario:
+            prompt += f"""
+## 即兴反应场景/题目
+
+场景：{scenario}
+请分析回答内容与该场景的相关性和切题程度。
+"""
+
+        if statistics:
+            prompt += f"""
+## 评分统计
+
+- 总字数: {statistics.get('total_words', 0)}
+- 平均准确度: {statistics.get('average_accuracy', 0):.1f}分
+- 低分字数: {statistics.get('low_score_count', 0)}个
+"""
+
+        if low_score_words and len(low_score_words) > 0:
+            prompt += """
+## 低分字词列表
+
+"""
+            for word in low_score_words[:20]:
+                prompt += f"- {word.get('word', '')}: 准确度{word.get('accuracy', 0)}分, 流利度{word.get('fluency', 0)}分\n"
+
+        # 添加词级时间戳信息
+        if word_info_list and len(word_info_list) > 0:
+            prompt += "\n## 词级别时间戳信息（ASR识别）\n\n| 词语 | 开始时间(ms) | 结束时间(ms) | 持续时长(ms) |\n|------|-------------|-------------|-------------|\n"
+            for w in word_info_list[:150]:
+                prompt += f"| {w.get('word', '')} | {w.get('begin_time', 0)} | {w.get('end_time', 0)} | {w.get('duration', 0)} |\n"
+
+            if word_info_list:
+                first_word_time = word_info_list[0].get('begin_time', 0)
+                prompt += f"\n第一个词出现时间: {first_word_time}ms\n"
+                prompt += "请根据时间戳数据分析反应速度（开口前停顿）和思考停顿位置。\n"
+
+        prompt += """
+请根据以上信息生成即兴反应评测报告，重点分析：
+1. 反应速度：根据时间戳分析开口前停顿和思考停顿
+2. 内容相关性：是否切题？是否跑题？
+3. 结构形成：是否有清晰的开头-主体-结尾结构？
+4. 逻辑连贯度：论点之间的衔接是否流畅？
+5. 表达冗余度：口头禅频率？废话比例？
+6. 下一次重点：给出最关键的一个改进点
+
+严格按照系统提示的JSON格式输出。"""
+
+        return prompt
+
+    def _default_impromptu_reaction_result(self, audio_duration=None) -> dict:
+        """即兴反应评测的默认返回结构"""
+        return {
+            "reaction_speed": {
+                "first_word_time_ms": 0,
+                "opening_speed": "未知",
+                "panic_signals": False,
+                "thinking_pauses": [],
+                "assessment": "无法解析AI响应"
+            },
+            "structure_formation": {
+                "formed_in_15s": False,
+                "structure_signal": "无法解析",
+                "structure_pattern": "未知",
+                "has_opening": False,
+                "has_body": False,
+                "has_closing": False,
+                "assessment": "无法解析AI响应"
+            },
+            "content_relevance": {
+                "topic_relevance": "未知",
+                "on_topic": False,
+                "topic_drift": False,
+                "off_topic_parts": [],
+                "relevance_description": "无法解析AI响应",
+                "assessment": "无法解析AI响应"
+            },
+            "logic_coherence": {
+                "coherence_level": "未知",
+                "logic_jumps": [],
+                "transition_quality": "无法解析AI响应",
+                "assessment": "无法解析AI响应"
+            },
+            "expression_redundancy": {
+                "filler_words": [],
+                "total_filler_count": 0,
+                "filler_ratio": "无法解析",
+                "redundancy_level": "未知",
+                "effective_content_ratio": "无法解析",
+                "assessment": "无法解析AI响应"
+            },
+            "overall_scores": {
+                "overall_score": 0,
+                "reaction_speed_score": 0,
+                "content_relevance_score": 0,
+                "logic_coherence_score": 0,
+                "fluency_score": 0,
+                "expression_score": 0,
+                "structure_score": 0,
+                "pronunciation_accuracy": 0,
+                "pronunciation_fluency": 0,
+                "pronunciation_completion": 0,
+                "suggested_score": 0,
+                "speech_rate_value": 0,
+                "speech_rate_level": "未知",
+                "level": "需改进",
+                "one_sentence_comment": "无法解析AI响应"
+            },
+            "structure_visualization": {
+                "key_points": [],
+                "conclusion": ""
+            },
+            "strengths": [],
+            "improvements": ["无法解析AI响应，请稍后重试"],
+            "next_action": "无法解析AI响应"
+        }
+
+
+
+
+# Singleton instance - backend determined by LLM_PROVIDER config
+if settings.llm_provider == "openai":
+    hunyuan_service = HunyuanService(
+        backend="openai",
+        model=settings.openai_model,
+        api_key=settings.openai_api_key,
+        base_url=settings.openai_base_url,
+        timeout=settings.hunyuan_timeout
+    )
+else:
+    hunyuan_service = HunyuanService()

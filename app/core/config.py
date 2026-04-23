@@ -2,6 +2,7 @@
 Application configuration management.
 """
 import os
+from typing import Optional
 from functools import lru_cache
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
@@ -35,6 +36,15 @@ class Settings(BaseSettings):
 
     # Hunyuan Model Config (hunyuan-turbo = Tencent HY 2.0 Instruct)
     hunyuan_model: str = os.getenv("HUNYUAN_MODEL", "hunyuan-turbo")
+    hunyuan_timeout: int = int(os.getenv("HUNYUAN_TIMEOUT", "120"))  # Timeout in seconds for LLM requests
+
+    # OpenAI Model Config
+    openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o")
+    openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
+    openai_base_url: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+
+    # LLM Provider Config (hunyuan or openai)
+    llm_provider: str = os.getenv("LLM_PROVIDER", "hunyuan")
 
     # S3/MinIO Object Storage Config
     s3_endpoint: str = os.getenv("S3_ENDPOINT", "")
@@ -43,6 +53,12 @@ class Settings(BaseSettings):
     s3_bucket_name: str = os.getenv("S3_BUCKET_NAME", "")
     s3_prefix: str = os.getenv("S3_PREFIX", "")
     s3_secure: bool = os.getenv("S3_SECURE", "false").lower() == "true"
+    s3_public_url: str = os.getenv("S3_PUBLIC_URL", "")
+
+    # Upload Config
+    # upload_mode: "oss" = MinIO直传OSS, "api" = POST接口上传
+    upload_mode: str = os.getenv("UPLOAD_MODE", "api")
+    upload_api_url: str = os.getenv("UPLOAD_API_URL", "")
 
     class Config:
         env_file = ".env"

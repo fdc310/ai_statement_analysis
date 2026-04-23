@@ -383,6 +383,11 @@ class StoryReadingResponse(BaseModel):
         default_factory=list, description="待改进建议列表"
     )
 
+    # 综合评分
+    overall_score: Optional[dict] = Field(
+        None, description="综合评分（score/level/comment）"
+    )
+
     # ASR时间戳数据
     asr_data: Optional[dict] = Field(
         None, description="ASR识别结果（带时间戳）"
@@ -454,6 +459,12 @@ class TongueTwisterReadingResponse(BaseModel):
     )
     practice_suggestions: List[str] = Field(
         default_factory=list, description="练习建议列表"
+    )
+    speech_rate_analysis: Optional[dict] = Field(
+        None, description="语速分析（仅article模式，含整体语速、分段语速、快慢段落）"
+    )
+    pause_analysis: Optional[dict] = Field(
+        None, description="断句停顿分析（仅article模式，含正确停顿、不当停顿、遗漏停顿）"
     )
 
     # ASR完整数据
@@ -544,4 +555,37 @@ class OpinionStatementResponse(BaseModel):
 
     # AI评测报告
     evaluation_report: Optional[dict] = Field(None, description="AI生成的观点陈述评测报告（JSON格式）")
+    error: Optional[str] = Field(None, description="错误信息")
+class ImpromptuReactionRequest(BaseModel):
+    """Request model for impromptu reaction (即兴反应) evaluation."""
+
+    audio_url: HttpUrl = Field(..., description="音频文件URL")
+    scenario: str = Field(..., description="触发情境/题目")
+    score_coeff: float = Field(
+        default=3.5,
+        ge=1.0,
+        le=4.0,
+        description="SOE评分苛刻指数：默认3.5（偏严格）"
+    )
+    language: str = Field(default="zh", description="语言：'zh'中文，'en'英文")
+    message_id: Optional[str] = Field(None, description="消息ID，不传则自动生成UUID")
+
+
+class ImpromptuReactionResponse(BaseModel):
+    """Response model for impromptu reaction evaluation."""
+
+    success: bool = Field(..., description="是否成功")
+    message: str = Field(..., description="状态消息")
+    message_id: str = Field(..., description="消息ID")
+    audio_url: str = Field(..., description="音频URL")
+    speech_text: Optional[str] = Field(None, description="语音转写文本（ASR识别结果）")
+    speech_rate: Optional[float] = Field(None, description="语速（字/分钟或词/分钟）")
+
+    # SOE评分数据
+    speech_scores: Optional[SpeechScores] = Field(None, description="语音评测评分")
+    statistics: Optional[EvaluationStatistics] = Field(None, description="评测统计数据")
+    low_score_words: Optional[List[WordScore]] = Field(None, description="低分字词列表")
+
+    # AI评测报告
+    evaluation_report: Optional[dict] = Field(None, description="AI生成的即兴反应评测报告（JSON格式）")
     error: Optional[str] = Field(None, description="错误信息")

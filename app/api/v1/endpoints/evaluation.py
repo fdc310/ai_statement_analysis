@@ -44,9 +44,12 @@ from app.schemas.evaluation import (
     VoiceChatRequest,
     VoiceChatResponse,
     OpinionStatementRequest,
-    OpinionStatementResponse
+    OpinionStatementResponse,
+    ImpromptuReactionRequest,
+    ImpromptuReactionResponse
 )
 from app.services.tencent import asr_service, soe_service, hunyuan_service, tts_service
+from app.services.tencent.audio import get_audio_duration
 
 router = APIRouter()
 
@@ -268,6 +271,15 @@ async def evaluate_speech(
 
         # Extract results
         speech_text = asr_result.get("text", "")
+
+        if not speech_text or not speech_text.strip():
+            return EvaluationAcceptedResponse(
+                success=False,
+                message="音频内容为空，未识别到有效语音",
+                message_id=msg_id,
+                error="ASR returned empty text"
+            )
+
         scores_data = soe_result.get("scores", {})
         low_score_words_data = soe_result.get("low_score_words", [])
         statistics_data = soe_result.get("statistics", {})
@@ -405,6 +417,15 @@ async def evaluate_speech_upload(
 
         # Extract results
         speech_text = asr_result.get("text", "")
+
+        if not speech_text or not speech_text.strip():
+            return EvaluationAcceptedResponse(
+                success=False,
+                message="音频内容为空，未识别到有效语音",
+                message_id=msg_id,
+                error="ASR returned empty text"
+            )
+
         scores_data = soe_result.get("scores", {})
         low_score_words_data = soe_result.get("low_score_words", [])
         statistics_data = soe_result.get("statistics", {})
@@ -634,6 +655,15 @@ async def generate_report(
             engine_type = "16k_zh" if request.language == "zh" else "16k_en"
             asr_result = await asr_service.recognize_audio(audio_data, engine_type)
             speech_text = asr_result.get("text", "")
+
+        if not speech_text or not speech_text.strip():
+            return ReportResponse(
+                success=False,
+                message="音频内容为空，未识别到有效语音",
+                message_id=msg_id,
+                audio_url=audio_url,
+                error="ASR returned empty text"
+            )
 
         # Calculate speech rate if audio_duration provided
         speech_rate = None
@@ -901,6 +931,15 @@ async def generate_report_upload(
             engine_type = "16k_zh" if language == "zh" else "16k_en"
             asr_result = await asr_service.recognize_audio(audio_data, engine_type)
             text = asr_result.get("text", "")
+
+        if not text or not text.strip():
+            return ReportResponse(
+                success=False,
+                message="音频内容为空，未识别到有效语音",
+                message_id=msg_id,
+                audio_url="",
+                error="ASR returned empty text"
+            )
 
         # Calculate speech rate if audio_duration provided
         speech_rate = None
@@ -1443,6 +1482,7 @@ async def analyze_story_reading(
     - 逻辑连贯性：时间跳跃、因果错误、事件遗漏、逻辑矛盾
     - 语言流畅度：长停顿、重复修正、填充词、句子完整度
     - 事件分布：各事件的时间位置和时长
+    - 综合评分：基于各维度的综合打分
     - 待改进建议
 
     **功能特性**:
@@ -1537,6 +1577,11 @@ async def analyze_story_reading(
             "缺少事件3",
             "结尾仓促，无总结"
         ],
+        "overall_score": {
+            "score": 72,
+            "level": "良好",
+            "comment": "故事结构完整但高潮不足，结尾仓促"
+        },
         "asr_data": {
             "text": "识别的完整文本",
             "word_info_list": [
@@ -1566,11 +1611,18 @@ async def analyze_story_reading(
         speech_text = asr_result.get("text", "")
         word_info_list = asr_result.get("word_info_list", [])
 
-        # Calculate audio duration from word timestamps
-        audio_duration = None
-        if word_info_list:
-            last_word = word_info_list[-1]
-            audio_duration = last_word.get("end_time", 0) / 1000  # Convert ms to seconds
+        if not speech_text or not speech_text.strip():
+            return StoryReadingResponse(
+                success=False,
+                message="音频内容为空，未识别到有效语音",
+                message_id=msg_id,
+                error="ASR returned empty text"
+            )
+
+        # Calculate audio duration from audio file
+        audio_duration = await get_audio_duration(audio_data)
+        if audio_duration is None and word_info_list:
+            audio_duration = max(w.get("end_time", 0) for w in word_info_list) / 1000
 
         # Analyze story reading with Hunyuan
         analysis_result = await hunyuan_service.analyze_story_reading(
@@ -1590,6 +1642,7 @@ async def analyze_story_reading(
             fluency_analysis=analysis_result.get("fluency_analysis"),
             event_distribution=analysis_result.get("event_distribution"),
             improvements=analysis_result.get("improvements", []),
+            overall_score=analysis_result.get("overall_score"),
             asr_data={
                 "text": speech_text,
                 "word_info_list": word_info_list
@@ -1705,6 +1758,14 @@ async def evaluate_tongue_twister_reading(
         speech_text = asr_result.get("text", "")
         word_info_list = asr_result.get("word_info_list", [])
 
+        if not speech_text or not speech_text.strip():
+            return TongueTwisterReadingResponse(
+                success=False,
+                message="音频内容为空，未识别到有效语音",
+                message_id=msg_id,
+                error="ASR returned empty text"
+            )
+
         # Extract SOE results
         scores_data = soe_result.get("scores", {})
         low_score_words_data = soe_result.get("low_score_words", [])
@@ -1712,11 +1773,10 @@ async def evaluate_tongue_twister_reading(
         soe_words_data = soe_result.get("words", [])
         soe_sentences_data = soe_result.get("sentences", [])
 
-        # Calculate audio duration from timestamps
-        audio_duration = None
-        if word_info_list:
-            last_word = word_info_list[-1]
-            audio_duration = last_word.get("end_time", 0) / 1000
+        # Calculate audio duration from audio file
+        audio_duration = await get_audio_duration(audio_data)
+        if audio_duration is None and word_info_list:
+            audio_duration = max(w.get("end_time", 0) for w in word_info_list) / 1000
 
         # Build typed score objects for response
         speech_scores = SpeechScores(
@@ -1761,6 +1821,8 @@ async def evaluate_tongue_twister_reading(
             fluency_analysis=analysis_result.get("fluency_analysis"),
             overall_assessment=analysis_result.get("overall_assessment"),
             practice_suggestions=analysis_result.get("practice_suggestions", []),
+            speech_rate_analysis=analysis_result.get("speech_rate_analysis"),
+            pause_analysis=analysis_result.get("pause_analysis"),
             asr_data={
                 "text": speech_text,
                 "word_info_list": word_info_list
@@ -1883,6 +1945,14 @@ async def voice_chat(
         speech_text = asr_result.get("text", "")
         word_info_list = asr_result.get("word_info_list", [])
 
+        if not speech_text or not speech_text.strip():
+            return VoiceChatResponse(
+                success=False,
+                message="音频内容为空，未识别到有效语音",
+                message_id=msg_id,
+                error="ASR returned empty text"
+            )
+
         # 2. Build conversation messages for Hunyuan
         # Determine system prompt: custom > scene preset > default
         if request.system_prompt:
@@ -1954,28 +2024,109 @@ async def generate_opinion_statement_report(
 
     **处理流程**:
     1. 下载音频文件
-    2. ASR语音识别（带时间戳）与 SOE发音评测 并行执行
-    3. 混元AI综合分析观点陈述表现
+    2. ASR语音识别（带时间戳）与 SOE发音评测（eval_mode=3自由说）并行执行
+    3. 混元AI综合分析观点陈述表现（含词级时间戳用于时间节奏分析）
 
     **评测维度**:
-    - 观点明确性（25%）：是否开门见山、观点是否鲜明，识别回避式开头
-    - 结构完整度（20%）：观点→理由→举例→总结 四要素是否完整
-    - 逻辑清晰度（25%）：是否存在逻辑跳跃、矛盾、论据堆砌
-    - 时间节奏（15%）：时长是否合适、前后半段语速变化、是否慌张加速
+    - 观点明确性（20%）：是否开门见山、观点是否鲜明，识别回避式开头
+    - 逻辑清晰度（20%）：是否存在逻辑跳跃、矛盾、论据堆砌
     - 表达精炼度（15%）：口头禅频率、废话比例、有效内容占比
+    - 流畅度（15%）：基于SOE发音流利度数据
+    - 语速（10%）：语速是否在合理区间
+    - 结构完整度（10%）：观点→理由→举例→总结 四要素
+    - 时间节奏（10%）：时长是否合适、前后半段语速变化、是否慌张加速
 
     **请求参数**:
-    | 参数 | 类型 | 必填 | 说明 |
-    |------|------|------|------|
-    | audio_url | string | 是 | 音频文件URL |
-    | ref_text | string | 否 | 参考文本，用于SOE评测对照（不传则自由说模式） |
-    | topic | string | 否 | 陈述题目/话题，用于分析贴题性 |
-    | score_coeff | float | 否 | SOE评分苛刻指数：1.0(宽松)-4.0(严格)，默认1.0 |
-    | language | string | 否 | 语言，默认zh |
-    | message_id | string | 否 | 消息ID |
+    | 参数 | 类型 | 必填 | 默认值 | 说明 |
+    |------|------|------|--------|------|
+    | audio_url | string | 是 | - | 音频文件URL |
+    | ref_text | string | 否 | 空 | 参考文本，用于SOE对照。不传/空→eval_mode=3自由说；≤120字→eval_mode=2段落模式 |
+    | topic | string | 否 | - | 陈述题目/话题，传入后会分析贴题性并在overall_scores中返回topic_relevance_score |
+    | score_coeff | float | 否 | 1.0 | SOE评分苛刻指数：1.0(宽松) ~ 4.0(严格) |
+    | language | string | 否 | zh | 语言：zh中文、en英文 |
+    | message_id | string | 否 | 自动UUID | 消息ID |
 
     **Headers**:
     - X-Signature: AES加密签名（必填）
+
+    **Response 主要字段**:
+    | 字段 | 说明 |
+    |------|------|
+    | speech_text | ASR语音转写文本 |
+    | speech_rate | 语速（字/分钟） |
+    | speech_scores | SOE评分（pronunciation_accuracy/fluency/completion/suggested_score） |
+    | statistics | 评测统计（total_words/average_accuracy/low_score_count） |
+    | low_score_words | 低分字词列表（准确度<90分） |
+    | evaluation_report | AI评测报告JSON，结构见下方 |
+
+    **evaluation_report 结构**:
+    ```json
+    {
+        "viewpoint_analysis": {
+            "has_clear_viewpoint": true,
+            "viewpoint_summary": "核心观点概括",
+            "opening_type": "直接亮明观点/渐进引入/回避式开头/模糊开头",
+            "opening_quote": "开头原文前30字",
+            "evasion_signals": ["回避性表达列表"],
+            "score": 85,
+            "assessment": "观点表达评价"
+        },
+        "structure_completeness": {
+            "score": 80,
+            "has_viewpoint": true, "has_reason": true,
+            "has_example": false, "has_summary": true,
+            "structure_pattern": "观点→理由→总结（缺少举例）",
+            "missing_parts": ["举例支撑"],
+            "assessment": "结构完整度评价"
+        },
+        "logic_clarity": {
+            "score": 75,
+            "logic_jumps": [...],
+            "contradictions": [...],
+            "argument_piling": {"detected": false, "description": "..."},
+            "reasoning_chain": "论证链条描述",
+            "assessment": "逻辑清晰度评价"
+        },
+        "time_rhythm": {
+            "score": 70,
+            "total_duration_seconds": 58.5,
+            "duration_level": "适中",
+            "first_half_rate": 180, "second_half_rate": 220,
+            "rate_change": "加速",
+            "panic_acceleration": false,
+            "time_allocation": {"opening_seconds": 5, "body_seconds": 45, "closing_seconds": 8},
+            "assessment": "时间节奏评价"
+        },
+        "expression_redundancy": {
+            "score": 65,
+            "filler_words": [{"word": "然后", "count": 5}],
+            "total_filler_count": 8,
+            "filler_ratio": "每分钟8次",
+            "redundant_expressions": [...],
+            "effective_content_ratio": "75%",
+            "assessment": "表达冗余度评价"
+        },
+        "overall_scores": {
+            "overall_score": 78,
+            "viewpoint_score": 85, "structure_score": 80, "logic_score": 75,
+            "fluency_score": 80, "speech_rate_score": 75,
+            "expression_score": 65, "time_rhythm_score": 70,
+            "pronunciation_accuracy": 88.5, "pronunciation_fluency": 82.3,
+            "pronunciation_completion": 95.0, "suggested_score": 85.0,
+            "speech_rate_value": 195,
+            "speech_rate_level": "良好",
+            "level": "良好",
+            "one_sentence_comment": "观点鲜明但举例不足"
+        },
+        "structure_visualization": {
+            "arguments": ["论点1", "论点2"],
+            "conclusion": "结论要点"
+        },
+        "strengths": ["优点1", "优点2"],
+        "improvements": ["改进建议1", "改进建议2"],
+        "practice_tips": [{"dimension": "结构组织", "tip": "练习方法"}]
+    }
+    ```
     """
     # Verify signature from header
     verify_signature(x_signature)
@@ -2011,6 +2162,15 @@ async def generate_opinion_statement_report(
         speech_text = asr_result.get("text", "")
         word_info_list = asr_result.get("word_info_list", [])
 
+        if not speech_text or not speech_text.strip():
+            return OpinionStatementResponse(
+                success=False,
+                message="音频内容为空，未识别到有效语音",
+                message_id=msg_id,
+                audio_url=audio_url,
+                error="ASR returned empty text"
+            )
+
         # 4. Extract SOE results
         scores_data = soe_result.get("scores", {})
         low_score_words_data = soe_result.get("low_score_words", [])
@@ -2031,12 +2191,11 @@ async def generate_opinion_statement_report(
             low_score_count=statistics_data.get("low_score_count", 0)
         )
 
-        # 5. Calculate audio duration and speech rate from timestamps
-        audio_duration = None
+        # 5. Calculate audio duration and speech rate
+        audio_duration = await get_audio_duration(audio_data)
+        if audio_duration is None and word_info_list:
+            audio_duration = max(w.get("end_time", 0) for w in word_info_list) / 1000
         speech_rate = None
-        if word_info_list:
-            last_word = word_info_list[-1]
-            audio_duration = last_word.get("end_time", 0) / 1000
 
         if audio_duration and audio_duration > 0 and speech_text:
             if request.language == "zh":
@@ -2081,6 +2240,227 @@ async def generate_opinion_statement_report(
         return OpinionStatementResponse(
             success=False,
             message="Opinion statement report generation failed",
+            message_id=msg_id,
+            audio_url=audio_url,
+            error=str(e)
+        )
+
+@router.post("/impromptu-reaction", response_model=ImpromptuReactionResponse)
+async def evaluate_impromptu_reaction(
+    request: ImpromptuReactionRequest,
+    x_signature: Optional[str] = Header(None, alias="X-Signature")
+) -> ImpromptuReactionResponse:
+    """
+    即兴反应评测接口（同步接口）。
+
+    传入音频URL和场景/题目，接口自动进行ASR语音识别和SOE发音评测（eval_mode=3自由说），
+    再由混元AI针对"即兴反应"场景进行犀利、结构化的专项评测。
+
+    **处理流程**:
+    1. 下载音频文件
+    2. ASR语音识别（带时间戳）与 SOE发音评测（eval_mode=3自由说）并行执行
+    3. 混元AI综合分析即兴反应表现（含词级时间戳用于反应速度分析）
+
+    **评测维度**:
+    - 反应速度：开口时间（基于时间戳）、慌乱信号、思考停顿
+    - 结构形成：前15秒内是否建立主线、结构信号词识别
+    - 内容相关性：是否切题、跑题部分识别
+    - 逻辑连贯度：思维跳跃、过渡质量
+    - 表达冗余度：口头禅统计、冗余度等级、有效内容占比
+
+    **请求参数**:
+    | 参数 | 类型 | 必填 | 默认值 | 说明 |
+    |------|------|------|--------|------|
+    | audio_url | string | 是 | - | 音频文件URL |
+    | scenario | string | 是 | - | 即兴反应的触发情境/题目 |
+    | score_coeff | float | 否 | 3.5 | SOE评分苛刻指数：1.0(宽松) ~ 4.0(严格) |
+    | language | string | 否 | zh | 语言：zh中文、en英文 |
+    | message_id | string | 否 | 自动UUID | 消息ID |
+
+    **Headers**:
+    - X-Signature: AES加密签名（必填）
+
+    **Response 主要字段**:
+    | 字段 | 说明 |
+    |------|------|
+    | speech_text | ASR语音转写文本 |
+    | speech_rate | 语速（字/分钟） |
+    | speech_scores | SOE评分（pronunciation_accuracy/fluency/completion/suggested_score） |
+    | statistics | 评测统计（total_words/average_accuracy/low_score_count） |
+    | low_score_words | 低分字词列表（准确度<90分） |
+    | evaluation_report | AI评测报告JSON，结构见下方 |
+
+    **evaluation_report 结构**:
+    ```json
+    {
+        "reaction_speed": {
+            "first_word_time_ms": 450,
+            "opening_speed": "果断开口/犹豫拖延/大量填充词起手",
+            "panic_signals": false,
+            "thinking_pauses": [
+                {"before_word": "我", "after_word": "认为", "pause_duration_ms": 1200, "position_time_ms": 3500}
+            ],
+            "assessment": "起步反应速度与情绪表现评价"
+        },
+        "structure_formation": {
+            "formed_in_15s": true,
+            "structure_signal": "我从两个方面来说",
+            "structure_pattern": "总分总",
+            "has_opening": true, "has_body": true, "has_closing": true,
+            "assessment": "结构形成评价"
+        },
+        "content_relevance": {
+            "topic_relevance": "紧扣主题/略微偏题/完全跑题",
+            "on_topic": true, "topic_drift": false,
+            "off_topic_parts": [],
+            "relevance_description": "相关性分析",
+            "assessment": "内容相关性评价"
+        },
+        "logic_coherence": {
+            "coherence_level": "流畅连贯/基本连贯/偶有跳跃/逻辑混乱",
+            "logic_jumps": [{"from_point": "...", "to_point": "...", "description": "..."}],
+            "transition_quality": "过渡质量评价",
+            "assessment": "逻辑连贯度评价"
+        },
+        "expression_redundancy": {
+            "filler_words": [{"word": "嗯", "count": 3}, {"word": "然后", "count": 5}],
+            "total_filler_count": 8,
+            "filler_ratio": "每分钟8次",
+            "redundancy_level": "极低/正常/偏高/极高",
+            "effective_content_ratio": "80%",
+            "assessment": "表达冗余度评价"
+        },
+        "overall_scores": {
+            "overall_score": 75,
+            "pronunciation_accuracy": 88.5, "pronunciation_fluency": 82.3,
+            "pronunciation_completion": 95.0, "suggested_score": 85.0,
+            "speech_rate_value": 195,
+            "speech_rate_level": "良好",
+            "level": "良好",
+            "one_sentence_comment": "反应迅速但主线略显松散"
+        },
+        "structure_visualization": {
+            "key_points": ["要点1", "要点2"],
+            "conclusion": "结论"
+        },
+        "strengths": ["优点1", "优点2"],
+        "improvements": ["改进建议1", "改进建议2"],
+        "next_action": "在开头先用一句话说清你的核心观点"
+    }
+    ```
+    """
+    # Verify signature from header
+    verify_signature(x_signature)
+
+    # Generate message_id if not provided
+    msg_id = request.message_id or str(uuid.uuid4())
+    audio_url = str(request.audio_url)
+
+    try:
+        # 1. Download audio
+        audio_data = await asr_service.download_audio(audio_url)
+
+        # 2. Run ASR (with timestamps) and SOE in parallel
+        # Impromptu reaction uses eval_mode=3 (free speech mode)
+        engine_type = "16k_zh" if request.language == "zh" else "16k_en"
+
+        asr_result, soe_result = await asyncio.gather(
+            asr_service.recognize_audio(
+                audio_data,
+                engine_type=engine_type,
+                word_info=1
+            ),
+            soe_service.evaluate_audio(
+                audio_data,
+                ref_text="",
+                eval_mode=3,
+                score_coeff=request.score_coeff,
+                server_type=0
+            )
+        )
+
+        # 3. Extract ASR results
+        speech_text = asr_result.get("text", "")
+        word_info_list = asr_result.get("word_info_list", [])
+
+        if not speech_text or not speech_text.strip():
+            return ImpromptuReactionResponse(
+                success=False,
+                message="音频内容为空，未识别到有效语音",
+                message_id=msg_id,
+                audio_url=audio_url,
+                error="ASR returned empty text"
+            )
+
+        # 4. Extract SOE results
+        scores_data = soe_result.get("scores", {})
+        low_score_words_data = soe_result.get("low_score_words", [])
+        statistics_data = soe_result.get("statistics", {})
+
+        # Build typed score objects for response
+        speech_scores = SpeechScores(
+            pronunciation_accuracy=scores_data.get("pronunciation_accuracy", 0),
+            pronunciation_fluency=scores_data.get("pronunciation_fluency", 0),
+            pronunciation_completion=scores_data.get("pronunciation_completion", 0),
+            suggested_score=scores_data.get("suggested_score", 0),
+            overall_score=scores_data.get("overall_score", 0)
+        )
+
+        statistics = EvaluationStatistics(
+            total_words=statistics_data.get("total_words", 0),
+            average_accuracy=statistics_data.get("average_accuracy", 0),
+            low_score_count=statistics_data.get("low_score_count", 0)
+        )
+
+        # 5. Calculate audio duration and speech rate
+        audio_duration = await get_audio_duration(audio_data)
+        if audio_duration is None and word_info_list:
+            audio_duration = max(w.get("end_time", 0) for w in word_info_list) / 1000
+        speech_rate = None
+
+        if audio_duration and audio_duration > 0 and speech_text:
+            if request.language == "zh":
+                punctuation = string.punctuation + '。，！？、；：""''（）【】《》…—'
+                char_count = len([c for c in speech_text if c not in punctuation and not c.isspace()])
+            else:
+                char_count = len(speech_text.split())
+            speech_rate = round(char_count / (audio_duration / 60), 1)
+
+        # 6. Generate impromptu reaction report via Hunyuan
+        evaluation_report = await hunyuan_service.generate_impromptu_reaction_report(
+            speech_text=speech_text,
+            speech_scores=scores_data,
+            low_score_words=low_score_words_data,
+            statistics=statistics_data,
+            scenario=request.scenario,
+            speech_rate=speech_rate,
+            audio_duration=audio_duration,
+            word_info_list=word_info_list,
+            language=request.language
+        )
+
+        return ImpromptuReactionResponse(
+            success=True,
+            message="Impromptu reaction report generated successfully",
+            message_id=msg_id,
+            audio_url=audio_url,
+            speech_text=speech_text,
+            speech_rate=speech_rate,
+            speech_scores=speech_scores,
+            statistics=statistics,
+            low_score_words=[
+                WordScore(word=w.get("word", ""), accuracy=w.get("accuracy", 0), fluency=w.get("fluency", 0))
+                for w in low_score_words_data
+            ] if low_score_words_data else None,
+            evaluation_report=evaluation_report
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        return ImpromptuReactionResponse(
+            success=False,
+            message="Impromptu reaction report generation failed",
             message_id=msg_id,
             audio_url=audio_url,
             error=str(e)

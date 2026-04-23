@@ -1,22 +1,27 @@
 # -*- coding: utf-8 -*-
 """
 S3/MinIO object storage service for file upload.
+Supports two upload modes: "oss" (MinIO direct) and "api" (POST to upload API).
 """
 import os
 import hashlib
 import datetime
 import uuid
+import logging
 from io import BytesIO
 from typing import Optional
 
+import httpx
 from minio import Minio
 from minio.error import S3Error
 
 from app.core.config import settings
 
+logger = logging.getLogger(__name__)
+
 
 class S3StorageService:
-    """MinIO storage service for uploading files."""
+    """Storage service supporting MinIO direct upload and POST API upload."""
 
     def __init__(
         self,
@@ -25,21 +30,12 @@ class S3StorageService:
         secret_key: Optional[str] = None,
         bucket_name: Optional[str] = None,
         prefix: Optional[str] = None,
-        secure: Optional[bool] = None
+        secure: Optional[bool] = None,
+        upload_mode: Optional[str] = None,
+        upload_api_url: Optional[str] = None,
+        public_url: Optional[str] = None
     ):
-        """
-        Initialize MinIO storage service.
-
-        Args:
-            endpoint: MinIO endpoint URL (without http:// or https://)
-            access_key: S3 access key
-            secret_key: S3 secret key
-            bucket_name: Bucket name
-            prefix: Path prefix for uploaded files
-            secure: Use HTTPS if True, HTTP if False
-        """
         self.endpoint = endpoint or settings.s3_endpoint
-        # Remove http:// or https:// from endpoint if present
         if self.endpoint.startswith(("http://", "https://")):
             self.endpoint = self.endpoint.replace("https://", "").replace("http://", "")
 
@@ -49,39 +45,36 @@ class S3StorageService:
         self.prefix = prefix or settings.s3_prefix
         self.secure = secure if secure is not None else settings.s3_secure
 
-        # 初始化MinIO客户端
+        # 上传模式: "oss" = MinIO直传, "api" = POST接口上传
+        self.upload_mode = upload_mode or settings.upload_mode
+        self.upload_api_url = upload_api_url or settings.upload_api_url
+
+        # 访问域名（阿里云OSS操作域名和访问域名不同）
+        # 例如: https://liaoyu-public.oss-cn-beijing.aliyuncs.com
+        self.public_url = public_url or settings.s3_public_url
+
+        # 初始化MinIO客户端（oss模式或需要list/delete等操作时使用）
+        # 阿里云OSS需要指定region，避免MinIO自动调用GetBucketLocation被403
         self.client = Minio(
             self.endpoint,
             access_key=self.access_key,
             secret_key=self.secret_key,
-            secure=self.secure
+            secure=self.secure,
+            region="oss-cn-beijing"
         )
+
+    # ==================== 内部工具方法 ====================
 
     def _generate_object_name(
         self,
         original_filename: str,
         subfolder: Optional[str] = None
     ) -> str:
-        """
-        Generate object name for S3 upload.
-
-        Args:
-            original_filename: Original filename
-            subfolder: Optional subfolder within prefix
-
-        Returns:
-            Object name for S3
-        """
-        # Get file extension
         _, ext = os.path.splitext(original_filename)
         ext = ext.lstrip('.')
-
-        # Generate unique filename using timestamp and UUID
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         unique_id = str(uuid.uuid4())[:8]
         filename = f"{timestamp}_{unique_id}.{ext}"
-
-        # Build full object path
         if subfolder:
             return f"{self.prefix}/{subfolder}/{filename}"
         return f"{self.prefix}/{filename}"
@@ -92,58 +85,116 @@ class S3StorageService:
         codec: str,
         subfolder: Optional[str] = None
     ) -> str:
-        """
-        Generate object name from text content.
-
-        Args:
-            text: Text content
-            codec: Audio codec (mp3, wav, etc.)
-            subfolder: Optional subfolder within prefix
-
-        Returns:
-            Object name for S3
-        """
-        # Generate hash of text for deterministic naming (optional)
         text_hash = hashlib.md5(text.encode('utf-8')).hexdigest()[:12]
-
-        # Generate timestamp
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"tts_{timestamp}_{text_hash}.{codec}"
-
-        # Build full object path
         if subfolder:
             return f"{self.prefix}/{subfolder}/{filename}"
         return f"{self.prefix}/{filename}"
 
-    def upload_bytes(
+    def _generate_oss_id(self) -> str:
+        """生成19位纯数字ID"""
+        return str(uuid.uuid4().int)[:19]
+
+    def _build_public_url(self, object_name: str) -> str:
+        """生成访问URL，优先使用配置的公共访问域名"""
+        if self.public_url:
+            return f"{self.public_url.rstrip('/')}/{object_name}"
+        protocol = "https" if self.secure else "http"
+        return f"{protocol}://{self.bucket_name}.{self.endpoint}/{object_name}"
+
+    def _format_result(self, success: bool, url: str = None, file_name: str = None,
+                        oss_id: str = None, error: str = None) -> dict:
+        """统一返回格式"""
+        if success:
+            return {
+                "success": True,
+                "url": url,
+                "fileName": file_name,
+                "ossId": oss_id
+            }
+        return {
+            "success": False,
+            "error": error,
+            "url": None,
+            "fileName": None,
+            "ossId": None
+        }
+
+    # ==================== POST API 上传 ====================
+
+    def _post_upload_bytes(
+        self,
+        data: bytes,
+        file_name: str = "upload.bin",
+        content_type: Optional[str] = None
+    ) -> dict:
+        """通过POST接口上传bytes数据。"""
+        try:
+            files = {"file": (file_name, BytesIO(data), content_type or "application/octet-stream")}
+            with httpx.Client(timeout=60.0) as client:
+                response = client.post(self.upload_api_url, files=files)
+                response.raise_for_status()
+
+            result = response.json()
+            if result.get("code") == 200:
+                data_body = result.get("data", {})
+                return self._format_result(
+                    True,
+                    url=data_body.get("url"),
+                    file_name=data_body.get("fileName"),
+                    oss_id=data_body.get("ossId")
+                )
+            else:
+                return self._format_result(False, error=f"上传接口返回错误: {result.get('msg')}")
+
+        except Exception as e:
+            logger.exception("POST上传失败")
+            return self._format_result(False, error=str(e))
+
+    def _post_upload_file(self, file_path: str) -> dict:
+        """通过POST接口上传本地文件。"""
+        try:
+            if not os.path.exists(file_path):
+                return self._format_result(False, error=f"文件不存在: {file_path}")
+
+            file_name = os.path.basename(file_path)
+            with open(file_path, "rb") as f:
+                files = {"file": (file_name, f)}
+                with httpx.Client(timeout=60.0) as client:
+                    response = client.post(self.upload_api_url, files=files)
+                    response.raise_for_status()
+
+            result = response.json()
+            if result.get("code") == 200:
+                data_body = result.get("data", {})
+                return self._format_result(
+                    True,
+                    url=data_body.get("url"),
+                    file_name=data_body.get("fileName"),
+                    oss_id=data_body.get("ossId")
+                )
+            else:
+                return self._format_result(False, error=f"上传接口返回错误: {result.get('msg')}")
+
+        except Exception as e:
+            logger.exception("POST上传文件失败")
+            return self._format_result(False, error=str(e))
+
+    # ==================== MinIO OSS 直传 ====================
+
+    def _oss_upload_bytes(
         self,
         data: bytes,
         object_name: Optional[str] = None,
         content_type: Optional[str] = None,
         subfolder: Optional[str] = None
     ) -> dict:
-        """
-        Upload bytes data to MinIO.
-
-        Args:
-            data: Bytes data to upload
-            object_name: Custom object name (auto-generated if None)
-            content_type: Content-Type header
-            subfolder: Optional subfolder within prefix
-
-        Returns:
-            Dict with upload result containing:
-                - success: bool
-                - url: str (public URL if successful)
-                - object_key: str (MinIO object key)
-                - error: str (if failed)
-        """
+        """通过MinIO SDK直传bytes到OSS。"""
         try:
-            # Generate object name if not provided
             if object_name is None:
                 object_name = self._generate_object_name("upload.bin", subfolder)
 
-            # Upload bytes
             data_stream = BytesIO(data)
             self.client.put_object(
                 bucket_name=self.bucket_name,
@@ -153,32 +204,78 @@ class S3StorageService:
                 content_type=content_type
             )
 
-            # 生成访问URL
-            protocol = "https" if self.secure else "http"
-            public_url = f"{protocol}://{self.endpoint}/{self.bucket_name}/{object_name}"
+            public_url = self._build_public_url(object_name)
+            file_name = os.path.basename(object_name)
 
-            return {
-                "success": True,
-                "url": public_url,
-                "object_key": object_name,
-                "bucket": self.bucket_name,
-                "size": len(data)
-            }
+            return self._format_result(True, url=public_url, file_name=file_name, oss_id=self._generate_oss_id())
 
         except S3Error as e:
-            return {
-                "success": False,
-                "error": f"MinIO错误: {str(e)}",
-                "url": None,
-                "object_key": object_name
-            }
+            return self._format_result(False, error=f"MinIO错误: {str(e)}")
         except Exception as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "url": None,
-                "object_key": object_name
-            }
+            return self._format_result(False, error=str(e))
+
+    def _oss_upload_file(
+        self,
+        file_path: str,
+        object_name: Optional[str] = None,
+        content_type: Optional[str] = None,
+        subfolder: Optional[str] = None
+    ) -> dict:
+        """通过MinIO SDK直传本地文件到OSS。"""
+        try:
+            if not os.path.exists(file_path):
+                return self._format_result(False, error=f"文件不存在: {file_path}")
+
+            if object_name is None:
+                object_name = os.path.basename(file_path)
+
+            full_object_name = f"{self.prefix}/{object_name}"
+            if subfolder:
+                full_object_name = f"{self.prefix}/{subfolder}/{object_name}"
+
+            self.client.fput_object(
+                self.bucket_name,
+                full_object_name,
+                file_path,
+                content_type=content_type
+            )
+
+            public_url = self._build_public_url(full_object_name)
+            file_name = os.path.basename(file_path)
+
+            return self._format_result(True, url=public_url, file_name=file_name, oss_id=self._generate_oss_id())
+
+        except S3Error as e:
+            return self._format_result(False, error=f"MinIO错误: {str(e)}")
+        except Exception as e:
+            return self._format_result(False, error=str(e))
+
+    # ==================== 统一对外接口（根据upload_mode自动选择） ====================
+
+    def upload_bytes(
+        self,
+        data: bytes,
+        object_name: Optional[str] = None,
+        content_type: Optional[str] = None,
+        subfolder: Optional[str] = None
+    ) -> dict:
+        """
+        上传bytes数据，根据upload_mode自动选择上传方式。
+
+        Args:
+            data: 文件字节数据
+            object_name: 自定义对象名（oss模式使用）
+            content_type: Content-Type
+            subfolder: 子目录
+
+        Returns:
+            Dict with url, fileName, ossId
+        """
+        if self.upload_mode == "api":
+            file_name = os.path.basename(object_name) if object_name else "upload.bin"
+            return self._post_upload_bytes(data, file_name, content_type)
+        else:
+            return self._oss_upload_bytes(data, object_name, content_type, subfolder)
 
     def upload_file(
         self,
@@ -188,68 +285,21 @@ class S3StorageService:
         subfolder: Optional[str] = None
     ) -> dict:
         """
-        Upload local file to MinIO.
+        上传本地文件，根据upload_mode自动选择上传方式。
 
         Args:
-            file_path: Path to local file
-            object_name: Custom object name (auto-generated if None)
-            content_type: Content-Type header
-            subfolder: Optional subfolder within prefix
+            file_path: 本地文件路径
+            object_name: 自定义对象名（oss模式使用）
+            content_type: Content-Type
+            subfolder: 子目录
 
         Returns:
-            Dict with upload result
+            Dict with url, fileName, ossId
         """
-        try:
-            if not os.path.exists(file_path):
-                return {
-                    "success": False,
-                    "error": f"文件不存在: {file_path}",
-                    "url": None,
-                    "object_key": None
-                }
-
-            if object_name is None:
-                object_name = os.path.basename(file_path)
-
-            # 完整的对象键
-            full_object_name = f"{self.prefix}/{object_name}"
-            if subfolder:
-                full_object_name = f"{self.prefix}/{subfolder}/{object_name}"
-
-            # 上传文件
-            self.client.fput_object(
-                self.bucket_name,
-                full_object_name,
-                file_path,
-                content_type=content_type
-            )
-
-            # 生成访问URL
-            protocol = "https" if self.secure else "http"
-            public_url = f"{protocol}://{self.endpoint}/{self.bucket_name}/{full_object_name}"
-
-            return {
-                "success": True,
-                "url": public_url,
-                "object_key": full_object_name,
-                "bucket": self.bucket_name,
-                "file_size": os.path.getsize(file_path)
-            }
-
-        except S3Error as e:
-            return {
-                "success": False,
-                "error": f"MinIO错误: {str(e)}",
-                "url": None,
-                "object_key": full_object_name
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "url": None,
-                "object_key": full_object_name
-            }
+        if self.upload_mode == "api":
+            return self._post_upload_file(file_path)
+        else:
+            return self._oss_upload_file(file_path, object_name, content_type, subfolder)
 
     def upload_tts_audio(
         self,
@@ -259,16 +309,16 @@ class S3StorageService:
         subfolder: str = "tts"
     ) -> dict:
         """
-        Upload TTS audio data to MinIO with appropriate naming.
+        上传TTS音频数据，根据upload_mode自动选择上传方式。
 
         Args:
-            audio_data: Audio bytes
-            codec: Audio codec (mp3, wav, etc.)
-            text: Original text (for naming)
-            subfolder: Subfolder for TTS files
+            audio_data: 音频字节数据
+            codec: 音频编码 (mp3, wav, etc.)
+            text: 原始文本（用于命名）
+            subfolder: 子目录
 
         Returns:
-            Dict with upload result
+            Dict with url, fileName, ossId
         """
         content_type = "audio/mpeg" if codec == "mp3" else "audio/wav"
 
@@ -277,7 +327,13 @@ class S3StorageService:
         else:
             object_name = self._generate_object_name(f"audio.{codec}", subfolder)
 
-        return self.upload_bytes(audio_data, object_name, content_type)
+        if self.upload_mode == "api":
+            file_name = os.path.basename(object_name)
+            return self._post_upload_bytes(audio_data, file_name, content_type)
+        else:
+            return self._oss_upload_bytes(audio_data, object_name, content_type)
+
+    # ==================== OSS管理操作（始终走MinIO） ====================
 
     def list_buckets(self):
         """列出所有bucket"""
@@ -289,15 +345,7 @@ class S3StorageService:
             return []
 
     def list_objects(self, prefix: Optional[str] = None) -> list:
-        """
-        List objects in bucket.
-
-        Args:
-            prefix: Prefix filter (uses service prefix if None)
-
-        Returns:
-            List of object info dicts
-        """
+        """List objects in bucket."""
         try:
             search_prefix = prefix or self.prefix
             objects = self.client.list_objects(
@@ -307,13 +355,11 @@ class S3StorageService:
             )
 
             result = []
-            protocol = "https" if self.secure else "http"
             for obj in objects:
                 result.append({
-                    "key": obj.object_name,
-                    "size": obj.size,
-                    "last_modified": obj.last_modified,
-                    "url": f"{protocol}://{self.endpoint}/{self.bucket_name}/{obj.object_name}"
+                    "url": self._build_public_url(obj.object_name),
+                    "fileName": os.path.basename(obj.object_name),
+                    "ossId": self._generate_oss_id()
                 })
 
             return result
@@ -326,15 +372,7 @@ class S3StorageService:
             return []
 
     def delete_object(self, object_name: str) -> dict:
-        """
-        Delete an object from MinIO.
-
-        Args:
-            object_name: S3 object key
-
-        Returns:
-            Dict with delete result
-        """
+        """Delete an object from MinIO."""
         try:
             self.client.remove_object(
                 bucket_name=self.bucket_name,
