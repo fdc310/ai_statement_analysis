@@ -49,6 +49,7 @@ from app.schemas.evaluation import (
     ImpromptuReactionResponse
 )
 from app.services.tencent import asr_service, soe_service, hunyuan_service, tts_service
+from app.services.tencent.audio import get_audio_duration
 
 router = APIRouter()
 
@@ -1618,11 +1619,10 @@ async def analyze_story_reading(
                 error="ASR returned empty text"
             )
 
-        # Calculate audio duration from word timestamps
-        audio_duration = None
-        if word_info_list:
-            last_word = word_info_list[-1]
-            audio_duration = last_word.get("end_time", 0) / 1000  # Convert ms to seconds
+        # Calculate audio duration from audio file
+        audio_duration = await get_audio_duration(audio_data)
+        if audio_duration is None and word_info_list:
+            audio_duration = max(w.get("end_time", 0) for w in word_info_list) / 1000
 
         # Analyze story reading with Hunyuan
         analysis_result = await hunyuan_service.analyze_story_reading(
@@ -1773,11 +1773,10 @@ async def evaluate_tongue_twister_reading(
         soe_words_data = soe_result.get("words", [])
         soe_sentences_data = soe_result.get("sentences", [])
 
-        # Calculate audio duration from timestamps
-        audio_duration = None
-        if word_info_list:
-            last_word = word_info_list[-1]
-            audio_duration = last_word.get("end_time", 0) / 1000
+        # Calculate audio duration from audio file
+        audio_duration = await get_audio_duration(audio_data)
+        if audio_duration is None and word_info_list:
+            audio_duration = max(w.get("end_time", 0) for w in word_info_list) / 1000
 
         # Build typed score objects for response
         speech_scores = SpeechScores(
@@ -2192,12 +2191,11 @@ async def generate_opinion_statement_report(
             low_score_count=statistics_data.get("low_score_count", 0)
         )
 
-        # 5. Calculate audio duration and speech rate from timestamps
-        audio_duration = None
+        # 5. Calculate audio duration and speech rate
+        audio_duration = await get_audio_duration(audio_data)
+        if audio_duration is None and word_info_list:
+            audio_duration = max(w.get("end_time", 0) for w in word_info_list) / 1000
         speech_rate = None
-        if word_info_list:
-            last_word = word_info_list[-1]
-            audio_duration = last_word.get("end_time", 0) / 1000
 
         if audio_duration and audio_duration > 0 and speech_text:
             if request.language == "zh":
@@ -2414,12 +2412,11 @@ async def evaluate_impromptu_reaction(
             low_score_count=statistics_data.get("low_score_count", 0)
         )
 
-        # 5. Calculate audio duration and speech rate from timestamps
-        audio_duration = None
+        # 5. Calculate audio duration and speech rate
+        audio_duration = await get_audio_duration(audio_data)
+        if audio_duration is None and word_info_list:
+            audio_duration = max(w.get("end_time", 0) for w in word_info_list) / 1000
         speech_rate = None
-        if word_info_list:
-            last_word = word_info_list[-1]
-            audio_duration = last_word.get("end_time", 0) / 1000
 
         if audio_duration and audio_duration > 0 and speech_text:
             if request.language == "zh":
