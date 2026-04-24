@@ -48,8 +48,10 @@ from app.schemas.evaluation import (
     ImpromptuReactionRequest,
     ImpromptuReactionResponse
 )
-from app.services.tencent import asr_service, soe_service, hunyuan_service, tts_service
+from app.services.tencent import asr_service, soe_service, tts_service
 from app.services.tencent.audio import get_audio_duration
+from app.services.chat.session_manager import chat_session_manager
+from app.services import get_llm_service
 
 router = APIRouter()
 
@@ -93,7 +95,7 @@ async def generate_report_task(
     """Background task to generate AI report and send callback."""
     try:
         # Generate AI evaluation report
-        evaluation_report = await hunyuan_service.generate_evaluation(
+        evaluation_report = await get_llm_service().generate_evaluation(
             speech_text,
             scores_data,
             custom_prompt,
@@ -713,7 +715,7 @@ async def generate_report(
         # 根据 report_type 生成不同格式的报告
         if request.report_type == ReportType.simple:
             # 简洁报告：语速评分 + 低分段落分析
-            evaluation_report = await hunyuan_service.generate_simple_report_json(
+            evaluation_report = await get_llm_service().generate_simple_report_json(
                 speech_text=speech_text,
                 speech_scores=scores_data,
                 low_score_words=low_score_words_data,
@@ -723,7 +725,7 @@ async def generate_report(
             )
         else:
             # 完整报告：语速 + 内容角度 + 逻辑与结构 + 表达与用词
-            evaluation_report = await hunyuan_service.generate_full_report_json(
+            evaluation_report = await get_llm_service().generate_full_report_json(
                 speech_text=speech_text,
                 speech_scores=scores_data,
                 low_score_words=low_score_words_data,
@@ -986,7 +988,7 @@ async def generate_report_upload(
         # 根据 report_type 生成不同格式的报告
         if report_type == "simple":
             # 简洁报告：语速评分 + 低分段落分析
-            evaluation_report = await hunyuan_service.generate_simple_report_json(
+            evaluation_report = await get_llm_service().generate_simple_report_json(
                 speech_text=text,
                 speech_scores=scores_data,
                 low_score_words=low_score_words_data,
@@ -996,7 +998,7 @@ async def generate_report_upload(
             )
         else:
             # 完整报告：语速 + 内容角度 + 逻辑与结构 + 表达与用词
-            evaluation_report = await hunyuan_service.generate_full_report_json(
+            evaluation_report = await get_llm_service().generate_full_report_json(
                 speech_text=text,
                 speech_scores=scores_data,
                 low_score_words=low_score_words_data,
@@ -1135,7 +1137,7 @@ async def analyze_text_structure(
     msg_id = request.message_id or str(uuid.uuid4())
 
     try:
-        analysis_result = await hunyuan_service.analyze_text_structure(
+        analysis_result = await get_llm_service().analyze_text_structure(
             text=request.text,
             custom_prompt=request.custom_prompt
         )
@@ -1341,7 +1343,7 @@ async def analyze_tongue_twister(
     msg_id = request.message_id or str(uuid.uuid4())
 
     try:
-        analysis_result = await hunyuan_service.analyze_tongue_twister(
+        analysis_result = await get_llm_service().analyze_tongue_twister(
             text=request.text,
             language=request.language
         )
@@ -1430,7 +1432,7 @@ async def analyze_sentence_interpretation(
     msg_id = request.message_id or str(uuid.uuid4())
 
     try:
-        analysis_result = await hunyuan_service.analyze_sentence_interpretation(
+        analysis_result = await get_llm_service().analyze_sentence_interpretation(
             text=request.text,
             custom_prompt=request.custom_prompt
         )
@@ -1625,7 +1627,7 @@ async def analyze_story_reading(
             audio_duration = max(w.get("end_time", 0) for w in word_info_list) / 1000
 
         # Analyze story reading with Hunyuan
-        analysis_result = await hunyuan_service.analyze_story_reading(
+        analysis_result = await get_llm_service().analyze_story_reading(
             speech_text=speech_text,
             story_text=request.story_text,
             word_info_list=word_info_list,
@@ -1713,7 +1715,7 @@ async def evaluate_tongue_twister_reading(
     | soe_sentences | SOE句子级评分 |
     | soe_data | SOE完整原始数据 |
     | strengths | AI分析的优势列表 |
-    | improvements | 待提升（多读/漏读/发音问题，article模式额外含读错字） |
+    | improvements | 待提升（多读/发音问题，article模式额外含读错字） |
     | fluency_analysis | 流畅度分析（article模式含评分、中断、重复读、卡壳） |
     | speech_rate_analysis | 语速分析（仅article模式，含分段语速） |
     | pause_analysis | 断句停顿分析（仅article模式） |
@@ -1794,7 +1796,7 @@ async def evaluate_tongue_twister_reading(
         )
 
         # Call Hunyuan for AI analysis
-        analysis_result = await hunyuan_service.analyze_tongue_twister_reading(
+        analysis_result = await get_llm_service().analyze_tongue_twister_reading(
             speech_text=speech_text,
             tongue_twister_text=request.tongue_twister_text,
             word_info_list=word_info_list,
@@ -1840,15 +1842,6 @@ async def evaluate_tongue_twister_reading(
         )
 
 
-# 预设场景系统提示词
-VOICE_CHAT_SCENE_PROMPTS = {
-    "interview": "你是一位专业的面试官，正在对候选人进行面试。请根据候选人的回答进行追问、评价或提出新的面试问题。语气专业但友好，回答简洁有针对性。",
-    "daily": "你是一个友好的对话伙伴，正在进行日常中文对话练习。请用自然、口语化的方式回应，适当引导话题，保持对话轻松有趣。回答简洁，适合口语交流。",
-    "customer_service": "你是一位专业的客服人员，正在处理客户的咨询和问题。请耐心倾听，准确回答问题，提供有效的解决方案。语气礼貌专业。",
-}
-
-DEFAULT_VOICE_CHAT_PROMPT = "你是一个智能对话助手，正在与用户进行语音对话。请用自然、简洁的方式回应，回答适合语音播报的长度，避免过长的文字。"
-
 
 @router.post("/voice-chat", response_model=VoiceChatResponse)
 async def voice_chat(
@@ -1858,14 +1851,9 @@ async def voice_chat(
     """
     语音对话接口 - 支持情景对话（面试、日常对话等）。
 
-    接收用户语音URL，ASR转文字（带时间戳），发送给AI对话，
-    再将AI回复通过TTS转为语音，返回AI文本 + 音频Base64数据。
-
-    **处理流程**:
-    1. 下载音频 → ASR语音识别（带时间戳）
-    2. 构建对话消息（system_prompt + 历史messages + 本次用户文本）
-    3. 混元AI生成回复
-    4. TTS将回复转为语音 → Base64编码
+    支持两种模式：
+    - **traditional**: ASR转文字 → LLM对话 → TTS语音
+    - **multimodal**: 多模态模型直接处理音频 → TTS语音
 
     **场景设定优先级**: 自定义system_prompt > 预设scene > 默认通用对话
 
@@ -1883,10 +1871,9 @@ async def voice_chat(
     ```json
     {
         "audio_url": "https://example.com/user-speech.mp3",
-        "messages": [
-            {"role": "user", "content": "你好，我来面试的"},
-            {"role": "assistant", "content": "你好，请先做一下自我介绍吧"}
-        ],
+        "session_id": null,
+        "mode": "traditional",
+        "messages": null,
         "system_prompt": null,
         "scene": "interview",
         "voice_type": 101001,
@@ -1898,35 +1885,18 @@ async def voice_chat(
     | 参数名 | 类型 | 必填 | 默认值 | 说明 |
     |--------|------|------|--------|------|
     | audio_url | string | 是 | - | 用户语音文件URL |
-    | messages | array | 否 | null | 对话历史（不含本次语音） |
+    | session_id | string | 否 | null | 会话ID，传入则复用服务端对话历史 |
+    | mode | string | 否 | traditional | traditional(ASR+LLM) / multimodal(多模态模型) |
+    | messages | array | 否 | null | 对话历史（兼容旧模式，优先使用服务端会话） |
     | system_prompt | string | 否 | null | 自定义系统提示词，优先级高于scene |
     | scene | string | 否 | null | 预设场景：interview/daily/customer_service |
     | voice_type | int | 否 | 101001 | TTS音色：101001(智瑜-女) 101005(智华-男) |
     | message_id | string | 否 | 自动生成 | 消息ID |
 
-    **Response 示例**:
-    ```json
-    {
-        "success": true,
-        "message": "Chat completed successfully",
-        "message_id": "uuid",
-        "user_text": "我叫张三，做了三年后端开发",
-        "assistant_text": "好的张三，请问你最擅长哪些技术栈？",
-        "audio_base64": "SUQzBAAAAAAAI1RTU0UAAAA...(base64编码的mp3音频)",
-        "asr_data": {
-            "text": "我叫张三，做了三年后端开发",
-            "word_info_list": [
-                {"word": "我", "begin_time": 0, "end_time": 200, "duration": 200}
-            ]
-        },
-        "error": null
-    }
-    ```
-
     **多轮对话使用说明**:
-    - 首轮：messages传null或不传
-    - 后续轮：将之前的user_text和assistant_text拼入messages数组
-    - audio_url始终传当前轮的用户语音
+    - 首轮：不传session_id，服务端自动创建会话并返回session_id
+    - 后续轮：传入session_id，服务端自动管理对话历史
+    - 场景切换：调用 POST /evaluation/voice-chat/scene 接口
     """
     verify_signature(x_signature)
 
@@ -1934,55 +1904,64 @@ async def voice_chat(
     audio_url = str(request.audio_url)
 
     try:
-        # 1. Download and recognize audio with timestamps
-        audio_data = await asr_service.download_audio(audio_url)
-        asr_result = await asr_service.recognize_audio(
-            audio_data,
-            engine_type="16k_zh",
-            word_info=1
+        # 1. Get or create session
+        session = await chat_session_manager.get_or_create_session(
+            session_id=request.session_id,
+            scene=request.scene,
+            system_prompt=request.system_prompt,
+            mode=request.mode,
+            voice_type=request.voice_type,
         )
 
-        speech_text = asr_result.get("text", "")
-        word_info_list = asr_result.get("word_info_list", [])
+        # 2. Process based on mode
+        user_text = None
+        asr_data = None
 
-        if not speech_text or not speech_text.strip():
-            return VoiceChatResponse(
-                success=False,
-                message="音频内容为空，未识别到有效语音",
-                message_id=msg_id,
-                error="ASR returned empty text"
+        if session.mode == "multimodal":
+            # Multimodal mode: send audio directly to model
+            chat_result = await get_llm_service().chat_multimodal(
+                audio_url=audio_url,
+                messages=session.messages,
+                system_prompt=session.system_prompt,
+                temperature=0.7,
             )
-
-        # 2. Build conversation messages for Hunyuan
-        # Determine system prompt: custom > scene preset > default
-        if request.system_prompt:
-            system_content = request.system_prompt
-        elif request.scene and request.scene in VOICE_CHAT_SCENE_PROMPTS:
-            system_content = VOICE_CHAT_SCENE_PROMPTS[request.scene]
         else:
-            system_content = DEFAULT_VOICE_CHAT_PROMPT
+            # Traditional mode: ASR → text → LLM
+            audio_data = await asr_service.download_audio(audio_url)
+            asr_result = await asr_service.recognize_audio(
+                audio_data,
+                engine_type="16k_zh",
+                word_info=0
+            )
+            user_text = asr_result.get("text", "")
 
-        hunyuan_messages = [{"Role": "system", "Content": system_content}]
+            if not user_text or not user_text.strip():
+                return VoiceChatResponse(
+                    success=False,
+                    message="音频内容为空，未识别到有效语音",
+                    message_id=msg_id,
+                    session_id=session.session_id,
+                    error="ASR returned empty text"
+                )
 
-        # Append conversation history
-        if request.messages:
-            for msg in request.messages:
-                hunyuan_messages.append({
-                    "Role": msg.role,
-                    "Content": msg.content
-                })
+            # Build messages for LLM
+            hunyuan_messages = [{"role": "user", "content": user_text}]
+            chat_result = await get_llm_service().chat(
+                [{"role": "system", "content": session.system_prompt}] + session.messages + hunyuan_messages,
+                temperature=0.7,
+            )
+            asr_data = {"text": user_text}
 
-        # Append current user message from ASR
-        hunyuan_messages.append({"Role": "user", "Content": speech_text})
-
-        # 3. Get AI response
-        chat_result = await hunyuan_service.chat(hunyuan_messages, temperature=0.7)
         assistant_text = chat_result.get("content", "")
 
-        # 4. TTS: convert AI response to audio and encode as base64
+        # 3. Update session history
+        await chat_session_manager.append_message(session.session_id, "user", user_text or "[audio]")
+        await chat_session_manager.append_message(session.session_id, "assistant", assistant_text)
+
+        # 4. TTS: convert AI response to audio
         audio_bytes = await tts_service.synthesize(
             text=assistant_text,
-            voice_type=request.voice_type,
+            voice_type=session.voice_type,
             codec="mp3"
         )
         audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
@@ -1991,13 +1970,11 @@ async def voice_chat(
             success=True,
             message="Chat completed successfully",
             message_id=msg_id,
-            user_text=speech_text,
+            session_id=session.session_id,
+            user_text=user_text,
             assistant_text=assistant_text,
             audio_base64=audio_base64,
-            asr_data={
-                "text": speech_text,
-                "word_info_list": word_info_list
-            }
+            asr_data=asr_data,
         )
 
     except HTTPException:
@@ -2009,6 +1986,51 @@ async def voice_chat(
             message_id=msg_id,
             error=str(e)
         )
+
+
+@router.post("/voice-chat/scene")
+async def switch_voice_chat_scene(
+    session_id: str = Form(..., description="会话ID"),
+    scene: str = Form(..., description="新场景：interview/daily/customer_service"),
+    system_prompt: Optional[str] = Form(None, description="自定义系统提示词（优先级高于scene）"),
+    x_signature: Optional[str] = Header(None, alias="X-Signature")
+):
+    """
+    会话级场景切换。
+
+    切换指定会话的对话场景，后续对话自动使用新场景的系统提示词。
+
+    **Headers**:
+    - X-Signature: AES加密签名（必填）
+
+    **Form data**:
+    | 参数名 | 类型 | 必填 | 说明 |
+    |--------|------|------|------|
+    | session_id | string | 是 | 会话ID |
+    | scene | string | 是 | 新场景：interview/daily/customer_service |
+    | system_prompt | string | 否 | 自定义系统提示词，优先级高于scene |
+    """
+    verify_signature(x_signature)
+
+    session = await chat_session_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+
+    updated = await chat_session_manager.update_scene(
+        session_id=session_id,
+        scene=scene,
+        system_prompt=system_prompt,
+    )
+
+    if not updated:
+        raise HTTPException(status_code=404, detail="Failed to update session")
+
+    return {
+        "success": True,
+        "session_id": session_id,
+        "scene": updated.scene,
+        "system_prompt": updated.system_prompt,
+    }
 
 
 @router.post("/opinion-statement", response_model=OpinionStatementResponse)
@@ -2206,7 +2228,7 @@ async def generate_opinion_statement_report(
             speech_rate = round(char_count / (audio_duration / 60), 1)
 
         # 6. Generate opinion statement report via Hunyuan
-        evaluation_report = await hunyuan_service.generate_opinion_statement_report(
+        evaluation_report = await get_llm_service().generate_opinion_statement_report(
             speech_text=speech_text,
             speech_scores=scores_data,
             low_score_words=low_score_words_data,
@@ -2427,7 +2449,7 @@ async def evaluate_impromptu_reaction(
             speech_rate = round(char_count / (audio_duration / 60), 1)
 
         # 6. Generate impromptu reaction report via Hunyuan
-        evaluation_report = await hunyuan_service.generate_impromptu_reaction_report(
+        evaluation_report = await get_llm_service().generate_impromptu_reaction_report(
             speech_text=speech_text,
             speech_scores=scores_data,
             low_score_words=low_score_words_data,

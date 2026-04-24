@@ -114,8 +114,8 @@ class EvaluationCallbackData(BaseModel):
     message: str = Field(..., description="Status message")
 
     # AI Report (sent via callback)
-    evaluation_report: Optional[str] = Field(
-        None, description="AI-generated evaluation report in Markdown format"
+    evaluation_report: Optional[dict] = Field(
+        None, description="AI-generated evaluation report in JSON format"
     )
 
     # Error info
@@ -144,8 +144,8 @@ class EvaluationResponse(BaseModel):
     low_score_words: Optional[List[WordScore]] = Field(
         None, description="Words with low pronunciation scores"
     )
-    evaluation_report: Optional[str] = Field(
-        None, description="AI-generated evaluation report in Markdown format"
+    evaluation_report: Optional[dict] = Field(
+        None, description="AI-generated evaluation report in JSON format"
     )
 
     # Error info
@@ -449,7 +449,7 @@ class TongueTwisterReadingResponse(BaseModel):
     )
     improvements: Optional[dict] = Field(
         None,
-        description="待提升分析，包含extra_words(多读)、missed_words(漏读)、pronunciation_issues(发音问题)"
+        description="待提升分析，包含extra_words(多读)、pronunciation_issues(发音问题)"
     )
     fluency_analysis: Optional[dict] = Field(
         None, description="流畅度分析（基于时间戳数据）"
@@ -486,8 +486,15 @@ class VoiceChatRequest(BaseModel):
     """Request model for voice chat conversation."""
 
     audio_url: HttpUrl = Field(..., description="用户语音文件URL")
+    session_id: Optional[str] = Field(
+        None, description="会话ID，不传则创建新会话。传入则复用服务端存储的对话历史"
+    )
+    mode: str = Field(
+        default="traditional",
+        description="对话模式：traditional(ASR转文字后LLM对话)、multimodal(多模态模型直接处理音频)"
+    )
     messages: Optional[List[ChatMessage]] = Field(
-        None, description="对话历史（不含本次语音），按时间顺序排列"
+        None, description="对话历史（兼容旧模式，优先使用服务端会话）"
     )
     system_prompt: Optional[str] = Field(
         None, description="自定义系统提示词，优先级高于scene预设场景"
@@ -509,14 +516,15 @@ class VoiceChatResponse(BaseModel):
     success: bool = Field(..., description="是否成功")
     message: str = Field(..., description="状态消息")
     message_id: str = Field(..., description="消息ID")
+    session_id: Optional[str] = Field(None, description="会话ID，后续对话传入可复用历史")
 
-    user_text: Optional[str] = Field(None, description="ASR识别的用户语音文本")
+    user_text: Optional[str] = Field(None, description="ASR识别的用户语音文本（multimodal模式下为null）")
     assistant_text: Optional[str] = Field(None, description="AI回复文本")
     audio_base64: Optional[str] = Field(None, description="AI回复的TTS音频Base64编码(mp3格式)")
 
     # ASR原始数据
     asr_data: Optional[dict] = Field(
-        None, description="ASR识别结果（含时间戳），包含text和word_info_list"
+        None, description="ASR识别结果，包含text（仅traditional模式）"
     )
 
     error: Optional[str] = Field(None, description="错误信息")

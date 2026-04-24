@@ -3,7 +3,7 @@ API v1 router - aggregates all endpoint routers.
 """
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import evaluation, auth, soe, tts
+from app.api.v1.endpoints import evaluation, auth, soe, tts, tasks, monitoring, agents, ws_streaming
 
 api_router = APIRouter()
 
@@ -27,4 +27,24 @@ api_router.include_router(
     tts.router,
     prefix="/tts",
     tags=["TTS - Text to Speech"]
+)
+api_router.include_router(
+    tasks.router,
+    prefix="/tasks",
+    tags=["Tasks - Async Task Management"]
+)
+api_router.include_router(
+    monitoring.router,
+    prefix="/monitoring",
+    tags=["Monitoring - Usage Dashboard"]
+)
+api_router.include_router(
+    agents.router,
+    prefix="/agents",
+    tags=["Agents - Standalone Agent Endpoints"]
+)
+api_router.include_router(
+    ws_streaming.router,
+    prefix="/streaming",
+    tags=["Streaming - WebSocket Audio Stream"]
 )

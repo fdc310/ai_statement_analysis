@@ -6,14 +6,46 @@ A FastAPI application that provides speech evaluation services:
 - Speech scoring (SOE)
 - AI-powered evaluation report generation (Hunyuan)
 """
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.api.v1 import api_router
 
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan: startup and shutdown events."""
+    # Startup
+    logger.info("Application starting up...")
+    yield
+    # Shutdown
+    logger.info("Application shutting down...")
+    # Clean up singletons
+    try:
+        from app.core.thread_pool import ThreadPool
+        ThreadPool.shutdown()
+    except Exception as e:
+        logger.warning(f"ThreadPool shutdown error: {e}")
+    try:
+        from app.services.tasks.callback import callback_dispatcher
+        await callback_dispatcher.close()
+    except Exception as e:
+        logger.warning(f"CallbackDispatcher close error: {e}")
+    try:
+        from app.services.chat.session_manager import chat_session_manager
+        await chat_session_manager.cleanup_expired()
+    except Exception as e:
+        logger.warning(f"ChatSessionManager cleanup error: {e}")
+
 app = FastAPI(
     title=settings.app_name,
+    lifespan=lifespan,
     description="""
 ## 语音演讲评测 API
 
@@ -48,9 +80,42 @@ Body: {"aes_key": "your_aes_key"}
 | `POST /evaluation/sentence-interpretation` | 句子解读分析 |
 | `POST /evaluation/story-reading` | 故事阅读评测（ASR + AI 分析） |
 | `POST /evaluation/tongue-twister-reading` | 绕口令/文章朗读评测（ASR + SOE + AI 分析） |
-| `POST /evaluation/voice-chat` | 语音对话（ASR + AI 对话 + TTS） |
+| `POST /evaluation/voice-chat` | 语音对话（传统/多模态 + 服务端会话管理） |
+| `POST /evaluation/voice-chat/scene` | 会话级场景切换 |
 | `POST /evaluation/opinion-statement` | 一分钟观点陈述评测（ASR + SOE + AI 分析），评测观点明确性、结构完整度、逻辑清晰度、时间节奏、表达精炼度 |
 | `POST /evaluation/impromptu-reaction` | 即兴反应评测（ASR + SOE + AI 分析），评测反应速度、结构形成、内容切题、逻辑连贯、表达冗余 |
+
+### Agents - 独立评测代理
+| 接口 | 说明 |
+|------|------|
+| `POST /agents/asr` | 独立 ASR 语音转文字 |
+| `POST /agents/soe` | 独立 SOE 语音评分 |
+| `POST /agents/content` | 独立内容分析 |
+| `POST /agents/fluency` | 独立流畅度分析 |
+| `POST /agents/report` | 独立报告生成 |
+
+### Tasks - 异步任务管理
+| 接口 | 说明 |
+|------|------|
+| `GET /tasks/` | 查询任务列表 |
+| `GET /tasks/{task_id}` | 查询任务状态 |
+| `GET /tasks/stats` | 任务统计 |
+
+### Monitoring - 使用监控
+| 接口 | 说明 |
+|------|------|
+| `GET /monitoring/usage` | 使用量汇总 |
+| `GET /monitoring/usage/daily` | 每日使用量 |
+| `GET /monitoring/usage/provider` | 按供应商统计 |
+| `GET /monitoring/usage/endpoint` | 按接口统计 |
+| `GET /monitoring/usage/agent` | 按代理统计 |
+| `GET /monitoring/cost` | 费用汇总 |
+| `POST /monitoring/cost/estimate` | 费用估算 |
+
+### Streaming - 实时流式评测
+| 接口 | 说明 |
+|------|------|
+| `WS /streaming/ws/stream` | WebSocket 实时音频流评测 |
 
 ### SOE - 语音评分
 | 接口 | 说明 |

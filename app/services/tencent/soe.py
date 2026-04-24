@@ -2,13 +2,14 @@
 Tencent Cloud SOE (Smart Oral Evaluation) service using WebSocket SDK.
 Supports fallback: recording mode -> streaming mode -> error.
 """
-import asyncio
 import sys
 import os
 import threading
 import time
 import logging
 from typing import Optional
+
+from app.core.thread_pool import ThreadPool
 
 # Add SDK path to sys.path
 SDK_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "core", "util", "tencentcloud-speech-sdk-python")
@@ -234,8 +235,8 @@ class SOEService:
         # Convert audio to standard format
         audio_data = await self.convert_audio(audio_data)
 
-        # Run sync evaluation in thread pool
-        result = await asyncio.to_thread(
+        # Run sync evaluation in centralized thread pool
+        result = await ThreadPool.run(
             self._sync_evaluate,
             audio_data,
             ref_text,
@@ -249,9 +250,9 @@ class SOEService:
             msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
             raise Exception(msg)
 
-        return self._parse_evaluation_result(result)
+        return self.parse_evaluation_result(result)
 
-    def _parse_evaluation_result(self, result: dict) -> dict:
+    def parse_evaluation_result(self, result: dict) -> dict:
         """Parse and structure the evaluation result from WebSocket SDK."""
         soe_result = result.get("result", {})
 

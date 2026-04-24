@@ -1,52 +1,63 @@
 """
-Unified LLM service supporting multiple providers (Hunyuan, OpenAI, etc.)
-All providers delegate to HunyuanService which handles backend switching internally.
+Unified LLM service supporting multiple providers via Provider Registry.
 """
 import logging
 from typing import Optional, AsyncGenerator
-from enum import Enum
 
-from app.services.tencent.hunyuan import HunyuanService
 from app.core.config import settings
+from app.services.llm.registry import ProviderRegistry
+from app.services.llm.base import ChatResponse
+from app.services.agents.prompts.common import extract_json
+from app.services.agents.prompts.evaluation import (
+    basic_evaluation_system_prompt,
+    basic_evaluation_user_prompt,
+    extended_evaluation_system_prompt,
+    extended_evaluation_user_prompt,
+    simple_report_system_prompt,
+    simple_report_user_prompt,
+    full_report_system_prompt,
+    full_report_user_prompt,
+)
+from app.services.agents.prompts.tongue_twister import (
+    tongue_twister_system_prompt,
+    tongue_twister_user_prompt,
+    article_reading_system_prompt,
+    article_reading_user_prompt,
+)
+from app.services.agents.prompts.opinion_statement import (
+    opinion_statement_system_prompt,
+    opinion_statement_user_prompt,
+)
+from app.services.agents.prompts.impromptu_reaction import (
+    impromptu_reaction_system_prompt,
+    impromptu_reaction_user_prompt,
+)
+from app.services.agents.prompts.story_reading import (
+    story_reading_system_prompt,
+    story_reading_user_prompt,
+)
+from app.services.agents.prompts.text_analysis import (
+    text_structure_system_prompt,
+    text_structure_user_prompt,
+    sentence_interpretation_system_prompt,
+    sentence_interpretation_user_prompt,
+)
 
 logger = logging.getLogger(__name__)
-
-
-class LLMProvider(str, Enum):
-    """Supported LLM providers."""
-    HUNYUAN = "hunyuan"
-    OPENAI = "openai"
 
 
 class LLMService:
     """Unified LLM service supporting multiple providers."""
 
-    def __init__(
-        self,
-        provider: str = "hunyuan",
-        model: Optional[str] = None,
-        api_key: Optional[str] = None,
-        base_url: Optional[str] = None,
-        timeout: Optional[float] = None
-    ):
-        self.provider = LLMProvider(provider.lower())
-        self.timeout = timeout or settings.hunyuan_timeout
+    def __init__(self, provider: Optional[str] = None, **kwargs):
+        self._provider_name = provider or settings.llm_provider
+        self._provider = ProviderRegistry.get_provider(self._provider_name, **kwargs)
+        logger.info(f"Initialized LLMService with provider: {self._provider_name}")
 
-        if self.provider == LLMProvider.OPENAI:
-            self.model = model or settings.openai_model
-            self._client = HunyuanService(
-                backend="openai",
-                model=self.model,
-                api_key=api_key or settings.openai_api_key,
-                base_url=base_url or settings.openai_base_url,
-                timeout=self.timeout
-            )
-        else:
-            self.model = model or settings.hunyuan_model
-            self._client = HunyuanService(
-                model=self.model,
-                timeout=self.timeout
-            )
+    @property
+    def provider_name(self) -> str:
+        """Get the provider name."""
+        return self._provider.name
 
     async def chat(
         self,
@@ -57,13 +68,14 @@ class LLMService:
         timeout: Optional[float] = None
     ) -> dict:
         """Generate chat completion."""
-        return await self._client.chat(
+        result = await self._provider.chat(
             messages=messages,
             temperature=temperature,
             top_p=top_p,
             stream=stream,
-            timeout=timeout or self.timeout
+            timeout=timeout
         )
+        return result.model_dump()
 
     async def chat_stream(
         self,
@@ -73,13 +85,35 @@ class LLMService:
         timeout: Optional[float] = None
     ) -> AsyncGenerator[str, None]:
         """Generate chat completion with streaming."""
-        async for chunk in self._client.chat_stream(
+        async for chunk in self._provider.chat_stream(
             messages=messages,
             temperature=temperature,
             top_p=top_p,
-            timeout=timeout or self.timeout
+            timeout=timeout
         ):
             yield chunk
+
+    async def chat_multimodal(
+        self,
+        audio_url: str,
+        messages: list[dict],
+        system_prompt: str,
+        temperature: float = 0.7,
+        top_p: float = 0.9,
+        model: Optional[str] = None,
+        timeout: Optional[float] = None
+    ) -> dict:
+        """Chat with multimodal model using audio input directly."""
+        result = await self._provider.chat_multimodal(
+            audio_url=audio_url,
+            messages=messages,
+            system_prompt=system_prompt,
+            temperature=temperature,
+            top_p=top_p,
+            model=model,
+            timeout=timeout
+        )
+        return result.model_dump()
 
     async def generate_evaluation(
         self,
@@ -88,15 +122,23 @@ class LLMService:
         custom_prompt: Optional[str] = None,
         low_score_words: Optional[list] = None,
         statistics: Optional[dict] = None
-    ) -> str:
-        """Generate speech evaluation report."""
-        return await self._client.generate_evaluation(
-            speech_text=speech_text,
-            speech_scores=speech_scores,
-            custom_prompt=custom_prompt,
-            low_score_words=low_score_words,
-            statistics=statistics
+    ) -> dict:
+        """Generate speech evaluation report in JSON format."""
+        system_prompt = basic_evaluation_system_prompt()
+        user_prompt = basic_evaluation_user_prompt(
+            speech_text, speech_scores, custom_prompt,
+            low_score_words, statistics
         )
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+
+        result = await self.chat(messages, temperature=0.3)
+        content = result["content"]
+        report_data = extract_json(content)
+        return report_data or {"raw_report": content}
 
     async def generate_evaluation_extended(
         self,
@@ -108,18 +150,23 @@ class LLMService:
         topic: Optional[str] = None,
         speech_rate: Optional[float] = None,
         audio_duration: Optional[float] = None
-    ) -> str:
-        """Generate extended speech evaluation report."""
-        return await self._client.generate_evaluation_extended(
-            speech_text=speech_text,
-            speech_scores=speech_scores,
-            custom_prompt=custom_prompt,
-            low_score_words=low_score_words,
-            statistics=statistics,
-            topic=topic,
-            speech_rate=speech_rate,
-            audio_duration=audio_duration
+    ) -> dict:
+        """Generate extended speech evaluation report with topic relevance and speech rate analysis."""
+        system_prompt = extended_evaluation_system_prompt(has_topic=topic is not None)
+        user_prompt = extended_evaluation_user_prompt(
+            speech_text, speech_scores, custom_prompt,
+            low_score_words, statistics, topic, speech_rate, audio_duration
         )
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+
+        result = await self.chat(messages, temperature=0.3)
+        content = result["content"]
+        report_data = extract_json(content)
+        return report_data or {"raw_report": content}
 
     async def generate_simple_report_json(
         self,
@@ -131,14 +178,21 @@ class LLMService:
         language: str = "zh"
     ) -> dict:
         """Generate simple report (JSON format)."""
-        return await self._client.generate_simple_report_json(
-            speech_text=speech_text,
-            speech_scores=speech_scores,
-            low_score_words=low_score_words,
-            speech_rate=speech_rate,
-            audio_duration=audio_duration,
-            language=language
+        system_prompt = simple_report_system_prompt(language=language)
+        user_prompt = simple_report_user_prompt(
+            speech_text, speech_scores, low_score_words,
+            speech_rate, audio_duration
         )
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+
+        result = await self.chat(messages, temperature=0.3)
+        content = result["content"]
+        report_data = extract_json(content)
+        return report_data or {"raw_report": content}
 
     async def generate_full_report_json(
         self,
@@ -152,49 +206,78 @@ class LLMService:
         language: str = "zh"
     ) -> dict:
         """Generate full report (JSON format)."""
-        return await self._client.generate_full_report_json(
-            speech_text=speech_text,
-            speech_scores=speech_scores,
-            low_score_words=low_score_words,
-            statistics=statistics,
-            topic=topic,
-            speech_rate=speech_rate,
-            audio_duration=audio_duration,
-            language=language
+        system_prompt = full_report_system_prompt(language=language)
+        user_prompt = full_report_user_prompt(
+            speech_text, speech_scores, low_score_words,
+            statistics, topic, speech_rate, audio_duration
         )
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+
+        result = await self.chat(messages, temperature=0.3)
+        content = result["content"]
+        report_data = extract_json(content)
+        return report_data or {"raw_report": content}
 
     async def analyze_text_structure(
         self,
         text: str,
         custom_prompt: Optional[str] = None
-    ) -> str:
+    ) -> dict:
         """Analyze text structure."""
-        return await self._client.analyze_text_structure(
-            text=text,
-            custom_prompt=custom_prompt
-        )
+        system_prompt = text_structure_system_prompt()
+        user_prompt = text_structure_user_prompt(text, custom_prompt)
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+
+        result = await self.chat(messages, temperature=0.3)
+        content = result["content"]
+        report_data = extract_json(content)
+        return report_data or {"raw_report": content}
 
     async def analyze_tongue_twister(
         self,
         text: str,
         language: str = "zh"
-    ) -> str:
+    ) -> dict:
         """Analyze tongue twister pronunciation."""
-        return await self._client.analyze_tongue_twister(
-            text=text,
-            language=language
-        )
+        system_prompt = tongue_twister_system_prompt(language=language)
+        user_prompt = tongue_twister_user_prompt(text)
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+
+        result = await self.chat(messages, temperature=0.3)
+        content = result["content"]
+        report_data = extract_json(content)
+        return report_data or {"raw_report": content}
 
     async def analyze_sentence_interpretation(
         self,
         text: str,
         custom_prompt: Optional[str] = None
-    ) -> str:
+    ) -> dict:
         """Analyze sentence for reading interpretation."""
-        return await self._client.analyze_sentence_interpretation(
-            text=text,
-            custom_prompt=custom_prompt
-        )
+        system_prompt = sentence_interpretation_system_prompt()
+        user_prompt = sentence_interpretation_user_prompt(text, custom_prompt)
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+
+        result = await self.chat(messages, temperature=0.3)
+        content = result["content"]
+        report_data = extract_json(content)
+        return report_data or {"raw_report": content}
 
     async def analyze_story_reading(
         self,
@@ -205,13 +288,20 @@ class LLMService:
         language: str = "zh"
     ) -> dict:
         """Analyze story reading performance."""
-        return await self._client.analyze_story_reading(
-            speech_text=speech_text,
-            story_text=story_text,
-            word_info_list=word_info_list,
-            audio_duration=audio_duration,
-            language=language
+        system_prompt = story_reading_system_prompt(language=language)
+        user_prompt = story_reading_user_prompt(
+            speech_text, story_text, word_info_list, audio_duration
         )
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+
+        result = await self.chat(messages, temperature=0.3)
+        content = result["content"]
+        report_data = extract_json(content)
+        return report_data or {"raw_report": content}
 
     async def analyze_tongue_twister_reading(
         self,
@@ -226,14 +316,25 @@ class LLMService:
         eval_type: str = "tongue_twister"
     ) -> dict:
         """Analyze reading performance for tongue twisters or articles."""
-        return await self._client.analyze_tongue_twister_reading(
-            speech_text=speech_text,
-            tongue_twister_text=tongue_twister_text,
-            word_info_list=word_info_list,
-            low_score_words=low_score_words,
-            scores_data=scores_data,
-            statistics_data=statistics_data,
-            audio_duration=audio_duration,
-            language=language,
-            eval_type=eval_type
-        )
+        if eval_type == "article":
+            system_prompt = article_reading_system_prompt(language=language)
+            user_prompt = article_reading_user_prompt(
+                speech_text, tongue_twister_text, word_info_list,
+                low_score_words, scores_data, statistics_data, audio_duration
+            )
+        else:
+            system_prompt = tongue_twister_system_prompt(language=language)
+            user_prompt = tongue_twister_user_prompt(
+                speech_text, tongue_twister_text, word_info_list,
+                low_score_words, scores_data, statistics_data, audio_duration
+            )
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+
+        result = await self.chat(messages, temperature=0.3)
+        content = result["content"]
+        report_data = extract_json(content)
+        return report_data or {"raw_report": content}

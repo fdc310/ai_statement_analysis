@@ -1,13 +1,14 @@
 """
 Tencent Cloud ASR (Automatic Speech Recognition) service using Flash Recognizer SDK.
 """
-import asyncio
 import json
 import sys
 import os
 from typing import Optional
 
 import httpx
+
+from app.core.thread_pool import ThreadPool
 
 # Add SDK path to sys.path
 SDK_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "core", "util", "tencentcloud-speech-sdk-python")
@@ -118,8 +119,8 @@ class ASRService:
         # Convert audio to standard format: 16kHz, 16bit, mono, WAV
         audio_data = await self.convert_audio(audio_data)
 
-        # Run sync recognition in thread pool
-        result = await asyncio.to_thread(
+        # Run sync recognition in centralized thread pool
+        result = await ThreadPool.run(
             self._sync_recognize,
             audio_data,
             engine_type,
