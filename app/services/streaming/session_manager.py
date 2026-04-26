@@ -69,6 +69,10 @@ class StreamingSession:
         self._on_asr_partial = on_asr_partial
         self._on_soe_intermediate = on_soe_intermediate
 
+        # Background tasks for forwarding intermediate results
+        self._asr_consumer_task: Optional[asyncio.Task] = None
+        self._soe_consumer_task: Optional[asyncio.Task] = None
+
     async def start(self) -> None:
         """Start the streaming session."""
         if self._started:
@@ -96,6 +100,13 @@ class StreamingSession:
             )
 
         self._started = True
+
+        # Start background consumers for real-time callbacks
+        if self._on_asr_partial and self._asr:
+            self._asr_consumer_task = asyncio.create_task(self._consume_asr_results())
+        if self._on_soe_intermediate and self._soe:
+            self._soe_consumer_task = asyncio.create_task(self._consume_soe_results())
+
         logger.info(f"Streaming session {self.session_id} started")
 
     async def feed_audio(self, pcm_chunk: bytes) -> None:
@@ -126,6 +137,54 @@ class StreamingSession:
             except Exception as e:
                 logger.error(f"SOE feed error: {e}")
 
+    async def _consume_asr_results(self) -> None:
+        """Background task: consume ASR queue and forward partial results to callback."""
+        try:
+            async for event in self._asr.get_results():
+                if event["type"] == "partial":
+                    # Extract text from ASR partial result
+                    result = event.get("data", {})
+                    if isinstance(result, dict):
+                        result_data = result.get("result", {})
+                        text = ""
+                        if isinstance(result_data, dict):
+                            text = result_data.get("voice_text_str", "")
+                        if text:
+                            try:
+                                await self._on_asr_partial({"data": {"text": text}})
+                            except Exception as e:
+                                logger.error(f"ASR partial callback error: {e}")
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"ASR consumer error: {e}")
+
+    async def _consume_soe_results(self) -> None:
+        """Background task: consume SOE queue and forward intermediate results to callback."""
+        try:
+            async for event in self._soe.get_intermediate_results():
+                if event["type"] == "intermediate":
+                    # Extract scores from SOE intermediate result
+                    data = event.get("data", {})
+                    if isinstance(data, dict):
+                        # Parse intermediate SOE result for scores
+                        pron = data.get("pronunciation_assessment", {})
+                        if isinstance(pron, dict):
+                            scores = {
+                                "pronunciation_accuracy": pron.get("accuracy", 0),
+                                "pronunciation_fluency": pron.get("fluency", 0),
+                                "pronunciation_completion": pron.get("completeness", 0),
+                                "suggested_score": pron.get("overall_score", 0),
+                            }
+                            try:
+                                await self._on_soe_intermediate({"data": {"scores": scores}})
+                            except Exception as e:
+                                logger.error(f"SOE intermediate callback error: {e}")
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"SOE consumer error: {e}")
+
     async def finish(self) -> StreamResult:
         """
         Finish the session and return results.
@@ -137,6 +196,15 @@ class StreamingSession:
             raise RuntimeError("Session already finished")
 
         logger.info(f"Streaming session {self.session_id} finishing")
+
+        # Cancel background consumers
+        for task in (self._asr_consumer_task, self._soe_consumer_task):
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
 
         # Mark buffer as final
         self._buffer.set_final()
