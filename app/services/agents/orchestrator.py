@@ -285,6 +285,19 @@ class EvaluationOrchestrator:
                             )
                         )
 
+        # Calculate overall scores for pipelines with dimension agents
+        if dim_names:
+            overall = self._calculate_overall_score(pipeline_name, context)
+            if overall:
+                context.set_agent_result(
+                    "overall_score",
+                    AgentResult(
+                        agent_name="overall_score",
+                        success=True,
+                        data=overall,
+                    )
+                )
+
         # Collect results
         result = {
             "pipeline": pipeline_name,
@@ -314,11 +327,142 @@ class EvaluationOrchestrator:
         result["statistics_data"] = context.statistics_data
         result["low_score_words"] = context.low_score_words
 
+        # Add overall score if calculated
+        overall_result = context.get_agent_result("overall_score")
+        if overall_result and overall_result.success:
+            result["overall_score"] = overall_result.data
+
         if progress_callback:
             await progress_callback("done", 1.0, "Post-stream agents completed")
 
         logger.info(f"Remaining agents for '{pipeline_name}' completed")
         return result
+
+    def _calculate_overall_score(self, pipeline_name: str, context: EvaluationContext) -> Optional[dict]:
+        """
+        Calculate overall score from dimension results using weighted formula.
+
+        Returns overall score dict or None if calculation not applicable.
+        """
+        # Weight definitions for each pipeline
+        WEIGHTS = {
+            "opinion_statement": {
+                "op_viewpoint": 0.20,
+                "op_structure": 0.10,
+                "op_logic": 0.20,
+                "op_expression": 0.15,
+                "op_time_rhythm": 0.10,
+                "speech_rate": 0.10,
+                # fluency from SOE: 15%
+            },
+            "impromptu_reaction": {
+                "ir_reaction_speed": 0.25,
+                "ir_content_relevance": 0.25,
+                "ir_logic": 0.20,
+                "ir_expression": 0.10,
+                "ir_structure": 0.05,
+                # fluency from SOE: 15%
+            },
+            "story_reading": {
+                "sr_structure": 0.30,
+                "sr_logic": 0.25,
+                "sr_fluency": 0.25,
+                "sr_event_distribution": 0.20,
+            },
+            "tongue_twister_reading": {
+                "tw_completeness": 0.30,
+                "tw_pronunciation": 0.35,
+                "tw_fluency": 0.25,
+                "tw_strengths": 0.10,
+            },
+            "article_reading": {
+                "ar_completeness": 0.25,
+                "ar_pronunciation": 0.30,
+                "ar_fluency": 0.25,
+                "ar_pause": 0.10,
+                "ar_strengths": 0.10,
+            },
+        }
+
+        weights = WEIGHTS.get(pipeline_name)
+        if not weights:
+            return None
+
+        total_score = 0.0
+        total_weight = 0.0
+        breakdown = {}
+
+        for dim_name, weight in weights.items():
+            if dim_name == "speech_rate":
+                # Use speech_rate from context (0-100 scale)
+                score = context.speech_rate or 0
+                # Convert from 字/分钟 to 0-100 score if needed
+                # speech_rate in context is actual rate, not a score
+                # Skip speech_rate in weighted calculation, use SOE fluency instead
+                continue
+            else:
+                agent_result = context.get_agent_result(f"dim_{dim_name}")
+                if agent_result and agent_result.success:
+                    score = agent_result.data.get("score", 0)
+                else:
+                    score = 0
+
+            breakdown[f"{dim_name}_score"] = score
+            total_score += score * weight
+            total_weight += weight
+
+        # Add SOE fluency score (15% for opinion_statement and impromptu_reaction)
+        if pipeline_name in ("opinion_statement", "impromptu_reaction"):
+            fluency_weight = 0.15
+            soe_scores = context.scores_data or {}
+            fluency_score = soe_scores.get("pronunciation_fluency", 0)
+            breakdown["fluency_score"] = fluency_score
+            total_score += fluency_score * fluency_weight
+            total_weight += fluency_weight
+
+        # Add speech_rate score (10% for opinion_statement)
+        if pipeline_name == "opinion_statement":
+            sr_weight = 0.10
+            # Convert speech_rate to 0-100 score
+            rate = context.speech_rate or 0
+            if 120 <= rate <= 180:
+                sr_score = 95
+            elif 100 <= rate < 120 or 180 < rate <= 200:
+                sr_score = 80
+            elif 80 <= rate < 100 or 200 < rate <= 220:
+                sr_score = 60
+            else:
+                sr_score = 40
+            breakdown["speech_rate_score"] = sr_score
+            total_score += sr_score * sr_weight
+            total_weight += sr_weight
+
+        # Calculate final score
+        overall_score = round(total_score / total_weight) if total_weight > 0 else 0
+
+        # Determine level
+        if overall_score >= 85:
+            level = "优秀"
+        elif overall_score >= 70:
+            level = "良好"
+        elif overall_score >= 55:
+            level = "一般"
+        else:
+            level = "需改进"
+
+        # Add SOE raw scores to breakdown
+        soe_scores = context.scores_data or {}
+        breakdown["pronunciation_accuracy"] = soe_scores.get("pronunciation_accuracy", 0)
+        breakdown["pronunciation_fluency"] = soe_scores.get("pronunciation_fluency", 0)
+        breakdown["pronunciation_completion"] = soe_scores.get("pronunciation_completion", 0)
+        breakdown["suggested_score"] = soe_scores.get("suggested_score", 0)
+        breakdown["speech_rate_value"] = context.speech_rate or 0
+
+        return {
+            "score": overall_score,
+            "level": level,
+            "breakdown": breakdown,
+        }
 
     async def _run_and_notify(
         self,

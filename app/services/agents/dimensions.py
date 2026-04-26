@@ -669,6 +669,945 @@ def tw_strengths_user_prompt(ctx: EvaluationContext) -> str:
 
 
 # ============================================================
+# Dimension: Opinion Statement - Viewpoint (一分钟观点陈述-观点明确性)
+# ============================================================
+
+def op_viewpoint_system_prompt(ctx: EvaluationContext) -> str:
+    return """你是观点表达分析专家。分析陈述者的观点是否明确、开头是否直接。
+
+输出JSON格式：
+{
+    "score": <0-100，观点越明确分越高>,
+    "level": "<优秀/良好/一般/较差>",
+    "analysis": "<观点表达分析>",
+    "suggestion": "<改进建议>",
+    "details": {
+        "has_clear_viewpoint": <是否有明确观点，true/false>,
+        "viewpoint_summary": "<用一句话概括核心观点，若无明确观点则写'未提出明确观点'>",
+        "opening_type": "<开头类型：直接亮明观点/渐进引入/回避式开头/模糊开头>",
+        "opening_quote": "<开头原文前30字>",
+        "evasion_signals": ["<回避性表达，如'我觉得这个问题比较复杂'、'这个要看情况'>"],
+        "assessment": "<观点表达评价，分析是否开门见山、观点是否鲜明>"
+    }
+}
+
+评分标准：
+- 优秀(90-100分): 开门见山，观点鲜明有力
+- 良好(70-89分): 有明确观点但表述不够直接
+- 一般(50-69分): 观点模糊，需要听者推断
+- 较差(0-49分): 没有明确观点，全程回避或模棱两可
+
+回避式开头识别规则：
+- "我觉得这个问题比较复杂" → 回避
+- "这个要从多个角度来看" → 回避
+- "关于这个话题其实很多人都讨论过" → 回避
+- "我认为XX是对的/XX是最重要的" → 直接亮明观点（正面示例）
+
+注意：
+- 只输出纯JSON，不要添加markdown代码块标记
+- 分析要具体，引用原文内容"""
+
+
+def op_viewpoint_user_prompt(ctx: EvaluationContext) -> str:
+    return f"""请分析以下一分钟观点陈述的观点明确性：
+
+{_base_data_block(ctx, "op_viewpoint")}
+
+重点分析：是否有清晰观点？开头是否直接？是否存在回避式表达？
+严格按JSON格式输出。"""
+
+
+# ============================================================
+# Dimension: Opinion Statement - Structure (一分钟观点陈述-结构完整度)
+# ============================================================
+
+def op_structure_system_prompt(ctx: EvaluationContext) -> str:
+    return """你是结构分析专家。分析陈述的结构完整性，是否包含观点→理由→举例→总结。
+
+输出JSON格式：
+{
+    "score": <0-100，结构越完整分越高>,
+    "level": "<优秀/良好/一般/较差>",
+    "analysis": "<结构完整度分析>",
+    "suggestion": "<改进建议>",
+    "details": {
+        "has_viewpoint": <是否有观点环节，true/false>,
+        "has_reason": <是否有理由论证，true/false>,
+        "has_example": <是否有举例支撑，true/false>,
+        "has_summary": <是否有总结收尾，true/false>,
+        "structure_pattern": "<实际结构模式描述，如'观点→理由→总结（缺少举例）'>",
+        "ideal_pattern": "观点→理由→举例→总结",
+        "missing_parts": ["<缺失的结构部分>"],
+        "assessment": "<结构完整度评价>"
+    }
+}
+
+评分标准：
+- 优秀(90-100分): 观点→理由→举例→总结 四要素完整
+- 良好(70-89分): 缺少一个要素但整体连贯
+- 一般(50-69分): 缺少两个要素，结构松散
+- 较差(0-49分): 无明显结构，意识流表达
+
+注意：
+- 只输出纯JSON，不要添加markdown代码块标记
+- 分析要具体，引用原文内容"""
+
+
+def op_structure_user_prompt(ctx: EvaluationContext) -> str:
+    return f"""请分析以下一分钟观点陈述的结构完整度：
+
+{_base_data_block(ctx, "op_structure")}
+
+重点分析：是否包含观点→理由→举例→总结的完整结构？
+严格按JSON格式输出。"""
+
+
+# ============================================================
+# Dimension: Opinion Statement - Logic (一分钟观点陈述-逻辑清晰度)
+# ============================================================
+
+def op_logic_system_prompt(ctx: EvaluationContext) -> str:
+    return """你是逻辑分析专家。分析陈述的逻辑清晰度，是否存在跳跃、矛盾、论据堆砌。
+
+输出JSON格式：
+{
+    "score": <0-100，逻辑越清晰分越高>,
+    "level": "<优秀/良好/一般/较差>",
+    "analysis": "<逻辑清晰度分析>",
+    "suggestion": "<改进建议>",
+    "details": {
+        "logic_jumps": [
+            {
+                "from_point": "<跳跃前的内容要点>",
+                "to_point": "<跳跃后的内容要点>",
+                "description": "<跳跃描述>"
+            }
+        ],
+        "contradictions": [
+            {
+                "statement_a": "<矛盾表述A>",
+                "statement_b": "<矛盾表述B>",
+                "description": "<矛盾分析>"
+            }
+        ],
+        "argument_piling": {
+            "detected": <是否存在论据堆砌（只罗列不论证），true/false>,
+            "description": "<堆砌情况描述>"
+        },
+        "reasoning_chain": "<论证链条描述，如'观点A←因为B←例如C←所以A'>",
+        "assessment": "<逻辑清晰度评价>"
+    }
+}
+
+评分标准：
+- 优秀(90-100分): 论证链清晰，因果关系明确，无矛盾
+- 良好(70-89分): 整体逻辑通顺，偶有小跳跃
+- 一般(50-69分): 存在明显逻辑跳跃或论据堆砌
+- 较差(0-49分): 逻辑混乱，自相矛盾
+
+注意：
+- 只输出纯JSON，不要添加markdown代码块标记
+- 分析要具体，引用原文内容"""
+
+
+def op_logic_user_prompt(ctx: EvaluationContext) -> str:
+    return f"""请分析以下一分钟观点陈述的逻辑清晰度：
+
+{_base_data_block(ctx, "op_logic")}
+
+重点分析：是否存在逻辑跳跃、矛盾、论据堆砌？
+严格按JSON格式输出。"""
+
+
+# ============================================================
+# Dimension: Opinion Statement - Time Rhythm (一分钟观点陈述-时间节奏)
+# ============================================================
+
+def op_time_rhythm_system_prompt(ctx: EvaluationContext) -> str:
+    return """你是时间节奏分析专家。分析陈述的时间分配和语速变化。
+
+输出JSON格式：
+{
+    "score": <0-100，时间节奏越合理分越高>,
+    "level": "<优秀/良好/一般/较差>",
+    "analysis": "<时间节奏分析>",
+    "suggestion": "<改进建议>",
+    "details": {
+        "total_duration_seconds": <总时长秒>,
+        "duration_level": "<时间判定：严重超时/略微超时/适中/偏短/过短>",
+        "first_half_rate": <前半段语速(字/分钟)>,
+        "second_half_rate": <后半段语速(字/分钟)>,
+        "rate_change": "<语速变化：加速/减速/平稳>",
+        "panic_acceleration": <后半段是否存在慌张加速，true/false>,
+        "time_allocation": {
+            "opening_seconds": <开头部分用时秒>,
+            "body_seconds": <主体论述用时秒>,
+            "closing_seconds": <收尾部分用时秒>,
+            "assessment": "<时间分配评价>"
+        },
+        "assessment": "<时间节奏评价>"
+    }
+}
+
+评分标准：
+- 优秀(90-100分): 50-65秒，节奏均匀，收尾从容
+- 良好(70-89分): 45-70秒，节奏基本稳定
+- 一般(50-69分): 30-45秒或70-80秒，节奏有波动
+- 较差(0-49分): <30秒或>80秒，后半段明显加速/草草收场
+
+注意：
+- 只输出纯JSON，不要添加markdown代码块标记
+- 利用词级时间戳分析前后半段语速变化
+- 如果音频时长为0或未提供，给出合理推断"""
+
+
+def op_time_rhythm_user_prompt(ctx: EvaluationContext) -> str:
+    return f"""请分析以下一分钟观点陈述的时间节奏：
+
+{_base_data_block(ctx, "op_time_rhythm")}
+
+重点分析：时间分配是否合理？前后半段语速变化？是否存在慌张加速？
+严格按JSON格式输出。"""
+
+
+# ============================================================
+# Dimension: Opinion Statement - Expression (一分钟观点陈述-表达精炼度)
+# ============================================================
+
+def op_expression_system_prompt(ctx: EvaluationContext) -> str:
+    return """你是表达精炼度分析专家。分析陈述的口头禅、冗余表达和有效内容占比。
+
+输出JSON格式：
+{
+    "score": <0-100，表达越精炼分越高>,
+    "level": "<优秀/良好/一般/较差>",
+    "analysis": "<表达精炼度分析>",
+    "suggestion": "<改进建议>",
+    "details": {
+        "filler_words": [
+            {"word": "<口头禅/填充词>", "count": <出现次数>, "example_context": "<出现的上下文示例>"}
+        ],
+        "total_filler_count": <口头禅总出现次数>,
+        "filler_ratio": "<废话比例描述，如每分钟X次口头禅>",
+        "redundant_expressions": [
+            {
+                "expression": "<冗余表达原文>",
+                "issue": "<问题描述，如重复啰嗦/无意义修饰/空泛套话>",
+                "suggestion": "<精简建议>"
+            }
+        ],
+        "effective_content_ratio": "<有效内容占比估算，如80%>",
+        "assessment": "<表达冗余度评价>"
+    }
+}
+
+评分标准：
+- 优秀(90-100分): 无口头禅，语言干练，有效内容占比>90%
+- 良好(70-89分): 偶有口头禅，表达基本精炼
+- 一般(50-69分): 较多口头禅或冗余表达，有效内容60-80%
+- 较差(0-49分): 大量废话，口头禅严重干扰表达
+
+常见口头禅列表：
+"然后"、"就是"、"其实"、"那个"、"嗯"、"啊"、"这个"、"对吧"、"反正"、"所以说"、"怎么说呢"
+
+注意：
+- 只输出纯JSON，不要添加markdown代码块标记
+- 分析要具体，引用原文内容"""
+
+
+def op_expression_user_prompt(ctx: EvaluationContext) -> str:
+    return f"""请分析以下一分钟观点陈述的表达精炼度：
+
+{_base_data_block(ctx, "op_expression")}
+
+重点分析：口头禅频率？废话比例？表达是否精炼？
+严格按JSON格式输出。"""
+
+
+# ============================================================
+# Dimension: Impromptu Reaction - Reaction Speed (即兴反应-反应速度)
+# ============================================================
+
+def ir_reaction_speed_system_prompt(ctx: EvaluationContext) -> str:
+    return """你是反应速度分析专家。分析即兴反应的起步速度和情绪表现。
+
+输出JSON格式：
+{
+    "score": <0-100，反应越快分越高>,
+    "level": "<优秀/良好/一般/较差>",
+    "analysis": "<反应速度分析>",
+    "suggestion": "<改进建议>",
+    "details": {
+        "first_word_time_ms": <第一个词出现的时间戳毫秒>,
+        "opening_speed": "<起步判断：果断开口/犹豫拖延/大量填充词起手>",
+        "panic_signals": <是否存在明显慌乱(如语速突变、结巴、大量"嗯""啊")，true/false>,
+        "thinking_pauses": [
+            {
+                "before_word": "<停顿前的词语>",
+                "after_word": "<停顿后的词语>",
+                "pause_duration_ms": <停顿时长毫秒>,
+                "position_time_ms": <停顿发生的时间点毫秒>
+            }
+        ],
+        "assessment": "<起步反应速度与情绪表现的详细评价>"
+    }
+}
+
+评分标准：
+- 优秀(90-100分): 果断开口(<500ms)，无慌乱信号，思考停顿少
+- 良好(70-89分): 短暂思考(500-1500ms)，停顿适度，情绪稳定
+- 一般(50-69分): 明显犹豫(1500-3000ms)或大量填充词起手，停顿较多
+- 较差(0-49分): 长时间沉默(>3000ms)或明显慌乱(语速突变、频繁结巴)
+
+注意：
+- 只输出纯JSON，不要添加markdown代码块标记
+- 反应速度分析需基于时间戳数据"""
+
+
+def ir_reaction_speed_user_prompt(ctx: EvaluationContext) -> str:
+    return f"""请分析以下即兴反应的反应速度：
+
+{_base_data_block(ctx, "ir_reaction_speed")}
+
+重点分析：开口时间、慌乱信号、思考停顿。
+严格按JSON格式输出。"""
+
+
+# ============================================================
+# Dimension: Impromptu Reaction - Structure (即兴反应-结构形成)
+# ============================================================
+
+def ir_structure_system_prompt(ctx: EvaluationContext) -> str:
+    return """你是结构形成分析专家。分析即兴反应的结构形成速度和清晰度。
+
+输出JSON格式：
+{
+    "score": <0-100，结构越清晰分越高>,
+    "level": "<优秀/良好/一般/较差>",
+    "analysis": "<结构形成分析>",
+    "suggestion": "<改进建议>",
+    "details": {
+        "formed_in_15s": <是否在开场(约前15秒)内建立主线结构，true/false>,
+        "structure_signal": "<结构信号词，如'我会从两个方面说'、'首先其次'等，若无则写'无明确结构信号'>",
+        "structure_pattern": "<实际表现出的结构，如'总分总'、'并列式'、'无序散发'>",
+        "has_opening": <是否有开头，true/false>,
+        "has_body": <是否有主体论述，true/false>,
+        "has_closing": <是否有结尾，true/false>,
+        "assessment": "<结构形成速度和清晰度的评价>"
+    }
+}
+
+评分标准：
+- 优秀(90-100分): 前15秒内建立主线，结构信号明确，开头-主体-结尾完整
+- 良好(70-89分): 有基本结构，但形成较慢或不够清晰
+- 一般(50-69分): 结构模糊，无明确信号词
+- 较差(0-49分): 无明显结构，全程无序散发
+
+注意：
+- 只输出纯JSON，不要添加markdown代码块标记
+- 结构形成速度重点看前15秒
+- 音频时长<10秒的发言，结构分上限40分"""
+
+
+def ir_structure_user_prompt(ctx: EvaluationContext) -> str:
+    return f"""请分析以下即兴反应的结构形成：
+
+{_base_data_block(ctx, "ir_structure")}
+
+重点分析：前15秒是否建立主线？结构信号词？开头-主体-结尾完整性？
+严格按JSON格式输出。"""
+
+
+# ============================================================
+# Dimension: Impromptu Reaction - Content Relevance (即兴反应-内容相关性)
+# ============================================================
+
+def ir_content_relevance_system_prompt(ctx: EvaluationContext) -> str:
+    return """你是内容相关性分析专家。分析即兴反应是否切题、是否有实质性回应。
+
+输出JSON格式：
+{
+    "score": <0-100，越切题分越高>,
+    "level": "<优秀/良好/一般/较差>",
+    "analysis": "<内容相关性分析>",
+    "suggestion": "<改进建议>",
+    "details": {
+        "topic_relevance": "<切题度判定：紧扣主题/略微偏题/完全跑题/复述题目未作回应>",
+        "is_mere_repetition": <用户是否只是复述/朗读了场景题目而非做出回应，true/false>,
+        "repetition_ratio": "<与场景题目的文字重叠比例估算，如'90%'、'30%'、'0%'>",
+        "has_original_response": <是否包含用户自己的原创回应内容（观点、共情、建议等），true/false>,
+        "on_topic": <是否切题，true/false>,
+        "topic_drift": <是否跑题，true/false>,
+        "off_topic_parts": ["<跑题的部分内容>"],
+        "content_depth": "<内容深度：有独到见解/有基本论述/内容单薄/几乎无内容>",
+        "relevance_description": "<相关性描述，分析回答是否紧扣场景，是否有实质性回应>",
+        "assessment": "<内容相关性评价，如果是复述题目必须明确指出>"
+    }
+}
+
+评分标准：
+- 优秀(90-100分): 紧扣场景，有实质性原创回应，内容有深度和独到见解
+- 良好(70-89分): 基本切题，有自己的回应但深度一般
+- 一般(50-69分): 部分相关但内容单薄，或有明显跑题
+- 较差(0-49分): 严重跑题或答非所问，内容空洞
+
+核心评测原则：
+1. 区分"回应"与"复述"：即兴反应的本质是对场景/题目做出自己的回应
+2. 有效回应：用自己的话对场景做出反应、评价、共情、建议、延伸等
+3. 无效复述：只是重复、朗读或转述场景题目本身，没有自己的观点
+4. 如果用户只是复述了场景题目本身，该项最高不超过20分
+
+注意：
+- 只输出纯JSON，不要添加markdown代码块标记
+- 分析要具体，引用原文内容"""
+
+
+def ir_content_relevance_user_prompt(ctx: EvaluationContext) -> str:
+    return f"""请分析以下即兴反应的内容相关性：
+
+{_base_data_block(ctx, "ir_content_relevance")}
+
+重点分析：是否切题？是回应还是复述题目？是否有实质性内容？
+严格按JSON格式输出。"""
+
+
+# ============================================================
+# Dimension: Impromptu Reaction - Logic (即兴反应-逻辑连贯度)
+# ============================================================
+
+def ir_logic_system_prompt(ctx: EvaluationContext) -> str:
+    return """你是逻辑连贯度分析专家。分析即兴反应的思维连贯性和过渡质量。
+
+输出JSON格式：
+{
+    "score": <0-100，逻辑越连贯分越高>,
+    "level": "<优秀/良好/一般/较差>",
+    "analysis": "<逻辑连贯度分析>",
+    "suggestion": "<改进建议>",
+    "details": {
+        "coherence_level": "<连贯程度：流畅连贯/基本连贯/偶有跳跃/逻辑混乱/内容不足无法判断>",
+        "logic_jumps": [
+            {
+                "from_point": "<跳跃前的内容>",
+                "to_point": "<跳跃后的内容>",
+                "description": "<思维跳跃或话题中断的具体表现>"
+            }
+        ],
+        "transition_quality": "<过渡质量评价>",
+        "assessment": "<逻辑连贯性与切题度的评价>"
+    }
+}
+
+评分标准：
+- 优秀(90-100分): 逻辑流畅，论点递进清晰，过渡自然，无跳跃
+- 良好(70-89分): 基本连贯，偶有小跳跃
+- 一般(50-69分): 连贯性一般，跳跃明显或话题中断
+- 较差(0-49分): 逻辑混乱或内容过少无法体现逻辑
+
+注意：
+- 只输出纯JSON，不要添加markdown代码块标记
+- 分析要具体，引用原文内容"""
+
+
+def ir_logic_user_prompt(ctx: EvaluationContext) -> str:
+    return f"""请分析以下即兴反应的逻辑连贯度：
+
+{_base_data_block(ctx, "ir_logic")}
+
+重点分析：思维是否连贯？过渡是否自然？是否有跳跃或中断？
+严格按JSON格式输出。"""
+
+
+# ============================================================
+# Dimension: Impromptu Reaction - Expression (即兴反应-表达精炼度)
+# ============================================================
+
+def ir_expression_system_prompt(ctx: EvaluationContext) -> str:
+    return """你是表达精炼度分析专家。分析即兴反应的口头禅和冗余表达。
+
+输出JSON格式：
+{
+    "score": <0-100，表达越精炼分越高>,
+    "level": "<优秀/良好/一般/较差>",
+    "analysis": "<表达精炼度分析>",
+    "suggestion": "<改进建议>",
+    "details": {
+        "filler_words": [
+            {"word": "<嗯/啊/然后/就是说等口头禅>", "count": <出现次数>}
+        ],
+        "total_filler_count": <口头禅总出现次数>,
+        "filler_ratio": "<废话比例描述>",
+        "redundancy_level": "<冗余度判定：极低/正常/偏高/极高>",
+        "effective_content_ratio": "<有效内容占比估算>",
+        "assessment": "<表达流畅度及填充词比例的评价>"
+    }
+}
+
+评分标准：
+- 优秀(90-100分): 无口头禅，表达干练，每句话都有信息量
+- 良好(70-89分): 偶有口头禅，基本精炼
+- 一般(50-69分): 较多口头禅或冗余表达
+- 较差(0-49分): 大量废话，严重干扰
+
+注意：
+- 只输出纯JSON，不要添加markdown代码块标记
+- 分析要具体，引用原文内容"""
+
+
+def ir_expression_user_prompt(ctx: EvaluationContext) -> str:
+    return f"""请分析以下即兴反应的表达精炼度：
+
+{_base_data_block(ctx, "ir_expression")}
+
+重点分析：口头禅频率？冗余度？有效内容占比？
+严格按JSON格式输出。"""
+
+
+# ============================================================
+# Dimension: Story Reading - Structure (小故事-结构分析)
+# ============================================================
+
+def sr_structure_system_prompt(ctx: EvaluationContext) -> str:
+    return """你是故事结构分析专家。分析故事阅读的结构完整性。
+
+输出JSON格式：
+{
+    "score": <0-100，结构越完整分越高>,
+    "level": "<优秀/良好/一般/较差>",
+    "analysis": "<结构分析>",
+    "suggestion": "<改进建议>",
+    "details": {
+        "opening": "<开头情况：有/无，简短描述>",
+        "development": "<发展情况：描述事件发展过程>",
+        "climax": "<高潮情况：有/无，简短描述>",
+        "ending": "<结尾情况：有/无/仓促，简短描述>",
+        "overall_assessment": "<整体结构评价>"
+    }
+}
+
+评分标准（满分30分）：
+- 有完整的开头、发展、高潮、结尾各得7-8分
+- 缺少开头扣7分，缺少发展扣8分，缺少高潮扣8分，缺少结尾扣7分
+- 结尾仓促或开头不完整各扣3-5分
+- 注意：很多故事本身可能没有明显的高潮结构（如日常叙事、简单描述类故事），此时不应因"缺少高潮"而扣分
+
+注意：
+- 只输出纯JSON，不要添加markdown代码块标记
+- 严格对照原始故事文本评估结构完整性"""
+
+
+def sr_structure_user_prompt(ctx: EvaluationContext) -> str:
+    return f"""请分析以下故事阅读的结构：
+
+{_base_data_block(ctx, "sr_structure")}
+
+重点分析：开头、发展、高潮、结尾是否完整？
+严格按JSON格式输出。"""
+
+
+# ============================================================
+# Dimension: Story Reading - Logic (小故事-逻辑分析)
+# ============================================================
+
+def sr_logic_system_prompt(ctx: EvaluationContext) -> str:
+    return """你是故事逻辑分析专家。分析故事阅读的逻辑连贯性。
+
+输出JSON格式：
+{
+    "score": <0-100，逻辑越连贯分越高>,
+    "level": "<优秀/良好/一般/较差>",
+    "analysis": "<逻辑分析>",
+    "suggestion": "<改进建议>",
+    "details": {
+        "time_jumps": <时间跳跃次数>,
+        "causal_errors": <因果错误次数>,
+        "missing_events": <事件遗漏次数>,
+        "logical_contradictions": <逻辑矛盾次数>,
+        "overall_assessment": "<整体逻辑评价>"
+    }
+}
+
+评分标准（满分25分）：
+- 每处时间跳跃扣3分，因果错误扣4分，事件遗漏扣3分，逻辑矛盾扣5分
+- 与原文对比，遗漏关键情节每处扣3-5分
+
+注意：
+- 只输出纯JSON，不要添加markdown代码块标记
+- 严格对照原始故事文本评估逻辑连贯性"""
+
+
+def sr_logic_user_prompt(ctx: EvaluationContext) -> str:
+    return f"""请分析以下故事阅读的逻辑：
+
+{_base_data_block(ctx, "sr_logic")}
+
+重点分析：时间跳跃、因果错误、事件遗漏、逻辑矛盾。
+严格按JSON格式输出。"""
+
+
+# ============================================================
+# Dimension: Story Reading - Fluency (小故事-流畅度分析)
+# ============================================================
+
+def sr_fluency_system_prompt(ctx: EvaluationContext) -> str:
+    return """你是故事流畅度分析专家。基于时间戳分析故事阅读的流畅度。
+
+输出JSON格式：
+{
+    "score": <0-100，流畅度越高分越高>,
+    "level": "<优秀/良好/一般/较差>",
+    "analysis": "<流畅度分析>",
+    "suggestion": "<改进建议>",
+    "details": {
+        "long_pauses_count": <长停顿(>3秒)次数>,
+        "long_pauses": [
+            {
+                "before_word": "<停顿前的词语>",
+                "after_word": "<停顿后的词语>",
+                "pause_duration_ms": <停顿时长毫秒>,
+                "position_time_ms": <停顿发生的时间点毫秒>
+            }
+        ],
+        "repetition_count": <重复修正次数>,
+        "filler_words_count": <填充词次数>,
+        "sentence_completion_rate": <句子完整度0-100>,
+        "overall_assessment": "<整体流畅度评价>"
+    }
+}
+
+评分标准（满分25分）：
+- 每处长停顿(>3秒)扣2分，重复修正每次扣1分，填充词每3个扣1分
+- 句子完整度低于80%额外扣5分
+
+时间戳分析规则：
+- 长停顿：相邻词语间隔超过3000ms（3秒）
+- 重复修正：相同或相似词语在短时间内重复出现
+- 填充词：如"啊"、"呃"、"那个"、"这个"、"嗯"等
+
+注意：
+- 只输出纯JSON，不要添加markdown代码块标记
+- 利用词级时间戳精确分析中断和停顿"""
+
+
+def sr_fluency_user_prompt(ctx: EvaluationContext) -> str:
+    return f"""请分析以下故事阅读的流畅度：
+
+{_base_data_block(ctx, "sr_fluency")}
+
+基于词级时间戳分析长停顿、重复修正、填充词使用情况。
+严格按JSON格式输出。"""
+
+
+# ============================================================
+# Dimension: Story Reading - Event Distribution (小故事-事件分布)
+# ============================================================
+
+def sr_event_distribution_system_prompt(ctx: EvaluationContext) -> str:
+    return """你是事件分布分析专家。分析故事阅读中各事件的时间分配。
+
+输出JSON格式：
+{
+    "score": <0-100，分布越合理分越高>,
+    "level": "<优秀/良好/一般/较差>",
+    "analysis": "<事件分布分析>",
+    "suggestion": "<改进建议>",
+    "details": {
+        "events": [
+            {
+                "name": "<事件名称>",
+                "start_time_ms": <开始时间毫秒>,
+                "end_time_ms": <结束时间毫秒>,
+                "duration_seconds": <持续时间秒>,
+                "assessment": "<该事件评价>"
+            }
+        ],
+        "transition_time": "<过渡时间描述>",
+        "overall_assessment": "<整体事件分布评价>"
+    }
+}
+
+评分标准（满分20分）：
+- 事件时间分配严重不均匀扣5-10分
+- 某段事件过于冗长或过于简略各扣3-5分
+
+注意：
+- 只输出纯JSON，不要添加markdown代码块标记
+- 事件分布要根据时间戳分析
+- 如果没有明确事件划分，根据内容合理划分"""
+
+
+def sr_event_distribution_user_prompt(ctx: EvaluationContext) -> str:
+    return f"""请分析以下故事阅读的事件分布：
+
+{_base_data_block(ctx, "sr_event_distribution")}
+
+基于时间戳分析各事件的时长和分布是否合理。
+严格按JSON格式输出。"""
+
+
+# ============================================================
+# Dimension: Opinion Statement - Overall Score (一分钟观点陈述-综合评分)
+# ============================================================
+
+def op_overall_score_system_prompt(ctx: EvaluationContext) -> str:
+    return """你是综合评分专家。根据各维度评分计算一分钟观点陈述的综合评分。
+
+你需要从context中读取各维度的评分结果，按加权公式计算综合评分。
+
+输出JSON格式：
+{
+    "score": <综合评分0-100>,
+    "level": "<优秀(85-100)/良好(70-84)/一般(55-69)/需改进(0-54)>",
+    "analysis": "<综合评价>",
+    "suggestion": "<整体改进建议>",
+    "details": {
+        "viewpoint_score": <观点明确性评分>,
+        "structure_score": <结构完整度评分>,
+        "logic_score": <逻辑清晰度评分>,
+        "fluency_score": <流畅度评分（来自SOE发音流利度）>,
+        "expression_score": <表达精炼度评分>,
+        "speech_rate_score": <语速评分>,
+        "time_rhythm_score": <时间节奏评分>,
+        "weights": "观点明确性20% + 结构完整度10% + 逻辑清晰度20% + 流畅度15% + 表达精炼度15% + 语速10% + 时间节奏10%",
+        "pronunciation_accuracy": <SOE发音准确度>,
+        "pronunciation_fluency": <SOE发音流利度>,
+        "pronunciation_completion": <SOE发音完整度>,
+        "suggested_score": <SOE综合建议分>,
+        "speech_rate_value": <语速数值>,
+        "speech_rate_level": "<优秀/良好/一般/较差>",
+        "one_sentence_comment": "<一句话点评，不超过30字>"
+    }
+}
+
+评分权重：
+- 观点明确性(op_viewpoint): 20%
+- 结构完整度(op_structure): 10%
+- 逻辑清晰度(op_logic): 20%
+- 流畅度: 15%（取SOE发音流利度分数）
+- 表达精炼度(op_expression): 15%
+- 语速(speech_rate): 10%
+- 时间节奏(op_time_rhythm): 10%
+
+计算方法：综合评分 = 各维度分数 × 对应权重，四舍五入取整
+
+注意：
+- 只输出纯JSON，不要添加markdown代码块标记
+- 如果某个维度分数为0或不存在，按0分计算
+- SOE原始分直接填入，不做换算"""
+
+
+def op_overall_score_user_prompt(ctx: EvaluationContext) -> str:
+    return f"""请根据以下各维度评分计算一分钟观点陈述的综合评分：
+
+{_base_data_block(ctx, "op_overall_score")}
+
+按加权公式计算综合评分并输出。
+严格按JSON格式输出。"""
+
+
+# ============================================================
+# Dimension: Impromptu Reaction - Overall Score (即兴反应-综合评分)
+# ============================================================
+
+def ir_overall_score_system_prompt(ctx: EvaluationContext) -> str:
+    return """你是综合评分专家。根据各维度评分计算即兴反应的综合评分。
+
+你需要从context中读取各维度的评分结果，按加权公式计算综合评分。
+
+输出JSON格式：
+{
+    "score": <综合评分0-100>,
+    "level": "<优秀(85-100)/良好(70-84)/一般(55-69)/需改进(0-54)>",
+    "analysis": "<综合评价>",
+    "suggestion": "<整体改进建议>",
+    "details": {
+        "reaction_speed_score": <反应速度评分>,
+        "content_relevance_score": <内容相关性评分>,
+        "logic_score": <逻辑连贯度评分>,
+        "fluency_score": <流畅度评分（来自SOE发音流利度）>,
+        "expression_score": <表达精炼度评分>,
+        "structure_score": <结构形成评分>,
+        "weights": "反应速度25% + 内容相关性25% + 逻辑连贯度20% + 流畅度15% + 表达精炼度10% + 结构形成5%",
+        "pronunciation_accuracy": <SOE发音准确度>,
+        "pronunciation_fluency": <SOE发音流利度>,
+        "pronunciation_completion": <SOE发音完整度>,
+        "suggested_score": <SOE综合建议分>,
+        "speech_rate_value": <语速数值>,
+        "speech_rate_level": "<优秀/良好/一般/较差>",
+        "level": "<等级：优秀(85-100)/良好(70-84)/一般(55-69)/需改进(0-54)>",
+        "one_sentence_comment": "<一句话总结，不超过30字>"
+    }
+}
+
+评分权重：
+- 反应速度(ir_reaction_speed): 25%
+- 内容相关性(ir_content_relevance): 25%
+- 逻辑连贯度(ir_logic): 20%
+- 流畅度: 15%（取SOE发音流利度分数）
+- 表达精炼度(ir_expression): 10%
+- 结构形成(ir_structure): 5%
+
+计算方法：综合评分 = 各维度分数 × 对应权重，四舍五入取整
+
+注意：
+- 只输出纯JSON，不要添加markdown代码块标记
+- 如果某个维度分数为0或不存在，按0分计算
+- SOE原始分直接填入，不做换算"""
+
+
+def ir_overall_score_user_prompt(ctx: EvaluationContext) -> str:
+    return f"""请根据以下各维度评分计算即兴反应的综合评分：
+
+{_base_data_block(ctx, "ir_overall_score")}
+
+按加权公式计算综合评分并输出。
+严格按JSON格式输出。"""
+
+
+# ============================================================
+# Dimension: Story Reading - Overall Score (小故事-综合评分)
+# ============================================================
+
+def sr_overall_score_system_prompt(ctx: EvaluationContext) -> str:
+    return """你是综合评分专家。根据各维度评分计算小故事朗读的综合评分。
+
+你需要从context中读取各维度的评分结果，按加权公式计算综合评分。
+
+输出JSON格式：
+{
+    "score": <综合评分0-100>,
+    "level": "<优秀(85-100)/良好(70-84)/一般(55-69)/需改进(0-54)>",
+    "analysis": "<综合评价>",
+    "suggestion": "<整体改进建议>",
+    "details": {
+        "structure_score": <结构分析评分>,
+        "logic_score": <逻辑分析评分>,
+        "fluency_score": <流畅度分析评分>,
+        "event_distribution_score": <事件分布评分>,
+        "weights": "结构分析30% + 逻辑分析25% + 流畅度分析25% + 事件分布20%",
+        "one_sentence_comment": "<一句话总结，不超过30字>"
+    }
+}
+
+评分权重：
+- 结构分析(sr_structure): 30%
+- 逻辑分析(sr_logic): 25%
+- 流畅度分析(sr_fluency): 25%
+- 事件分布(sr_event_distribution): 20%
+
+计算方法：综合评分 = 各维度分数 × 对应权重，四舍五入取整
+
+注意：
+- 只输出纯JSON，不要添加markdown代码块标记
+- 如果某个维度分数为0或不存在，按0分计算"""
+
+
+def sr_overall_score_user_prompt(ctx: EvaluationContext) -> str:
+    return f"""请根据以下各维度评分计算小故事朗读的综合评分：
+
+{_base_data_block(ctx, "sr_overall_score")}
+
+按加权公式计算综合评分并输出。
+严格按JSON格式输出。"""
+
+
+# ============================================================
+# Dimension: Tongue Twister - Overall Score (绕口令-综合评分)
+# ============================================================
+
+def tw_overall_score_system_prompt(ctx: EvaluationContext) -> str:
+    return """你是综合评分专家。根据各维度评分计算绕口令朗读的综合评分。
+
+你需要从context中读取各维度的评分结果，按加权公式计算综合评分。
+
+输出JSON格式：
+{
+    "score": <综合评分0-100>,
+    "level": "<优秀(85-100)/良好(70-84)/一般(55-69)/需改进(0-54)>",
+    "analysis": "<综合评价>",
+    "suggestion": "<整体改进建议>",
+    "details": {
+        "completeness_score": <完整度评分>,
+        "pronunciation_score": <发音评分>,
+        "fluency_score": <流畅度评分>,
+        "strengths_score": <优势评分>,
+        "weights": "完整度30% + 发音35% + 流畅度25% + 优势10%",
+        "one_sentence_comment": "<一句话总结，不超过30字>"
+    }
+}
+
+评分权重：
+- 完整度(tw_completeness): 30%
+- 发音(tw_pronunciation): 35%
+- 流畅度(tw_fluency): 25%
+- 优势(tw_strengths): 10%
+
+计算方法：综合评分 = 各维度分数 × 对应权重，四舍五入取整
+
+注意：
+- 只输出纯JSON，不要添加markdown代码块标记
+- 如果某个维度分数为0或不存在，按0分计算"""
+
+
+def tw_overall_score_user_prompt(ctx: EvaluationContext) -> str:
+    return f"""请根据以下各维度评分计算绕口令朗读的综合评分：
+
+{_base_data_block(ctx, "tw_overall_score")}
+
+按加权公式计算综合评分并输出。
+严格按JSON格式输出。"""
+
+
+# ============================================================
+# Dimension: Article Reading - Overall Score (文章朗读-综合评分)
+# ============================================================
+
+def ar_overall_score_system_prompt(ctx: EvaluationContext) -> str:
+    return """你是综合评分专家。根据各维度评分计算文章朗读的综合评分。
+
+你需要从context中读取各维度的评分结果，按加权公式计算综合评分。
+
+输出JSON格式：
+{
+    "score": <综合评分0-100>,
+    "level": "<优秀(85-100)/良好(70-84)/一般(55-69)/需改进(0-54)>",
+    "analysis": "<综合评价>",
+    "suggestion": "<整体改进建议>",
+    "details": {
+        "completeness_score": <完整度评分>,
+        "pronunciation_score": <发音评分>,
+        "fluency_score": <流畅度评分>,
+        "pause_score": <停顿评分>,
+        "strengths_score": <优势评分>,
+        "weights": "完整度25% + 发音30% + 流畅度25% + 停顿10% + 优势10%",
+        "one_sentence_comment": "<一句话总结，不超过30字>"
+    }
+}
+
+评分权重：
+- 完整度(ar_completeness): 25%
+- 发音(ar_pronunciation): 30%
+- 流畅度(ar_fluency): 25%
+- 停顿(ar_pause): 10%
+- 优势(ar_strengths): 10%
+
+计算方法：综合评分 = 各维度分数 × 对应权重，四舍五入取整
+
+注意：
+- 只输出纯JSON，不要添加markdown代码块标记
+- 如果某个维度分数为0或不存在，按0分计算"""
+
+
+def ar_overall_score_user_prompt(ctx: EvaluationContext) -> str:
+    return f"""请根据以下各维度评分计算文章朗读的综合评分：
+
+{_base_data_block(ctx, "ar_overall_score")}
+
+按加权公式计算综合评分并输出。
+严格按JSON格式输出。"""
+
+
+# ============================================================
 # Dimension: Article Reading - Completeness (文章朗读完整度)
 # ============================================================
 
@@ -951,15 +1890,32 @@ DIMENSION_REGISTRY = {
     "ar_fluency": (ar_fluency_system_prompt, ar_fluency_user_prompt),
     "ar_pause": (ar_pause_system_prompt, ar_pause_user_prompt),
     "ar_strengths": (ar_strengths_system_prompt, ar_strengths_user_prompt),
+    # 一分钟观点陈述专用维度
+    "op_viewpoint": (op_viewpoint_system_prompt, op_viewpoint_user_prompt),
+    "op_structure": (op_structure_system_prompt, op_structure_user_prompt),
+    "op_logic": (op_logic_system_prompt, op_logic_user_prompt),
+    "op_time_rhythm": (op_time_rhythm_system_prompt, op_time_rhythm_user_prompt),
+    "op_expression": (op_expression_system_prompt, op_expression_user_prompt),
+    # 即兴反应专用维度
+    "ir_reaction_speed": (ir_reaction_speed_system_prompt, ir_reaction_speed_user_prompt),
+    "ir_structure": (ir_structure_system_prompt, ir_structure_user_prompt),
+    "ir_content_relevance": (ir_content_relevance_system_prompt, ir_content_relevance_user_prompt),
+    "ir_logic": (ir_logic_system_prompt, ir_logic_user_prompt),
+    "ir_expression": (ir_expression_system_prompt, ir_expression_user_prompt),
+    # 小故事专用维度
+    "sr_structure": (sr_structure_system_prompt, sr_structure_user_prompt),
+    "sr_logic": (sr_logic_system_prompt, sr_logic_user_prompt),
+    "sr_fluency": (sr_fluency_system_prompt, sr_fluency_user_prompt),
+    "sr_event_distribution": (sr_event_distribution_system_prompt, sr_event_distribution_user_prompt),
 }
 
 # Pipeline -> list of dimension names (补全缺失维度)
 PIPELINE_DIMENSIONS = {
     "basic_evaluation": ["speech_rate", "logic", "expression", "issues", "strengths"],
     "extended_evaluation": ["speech_rate", "content", "logic", "expression", "verbal_habits", "issues", "strengths", "weak_paragraphs"],
-    "opinion_statement": ["speech_rate", "content", "logic", "expression", "verbal_habits", "issues", "strengths", "weak_paragraphs"],
-    "impromptu_reaction": ["speech_rate", "content", "logic", "expression", "verbal_habits", "issues", "strengths"],
-    "story_reading": ["speech_rate", "content", "logic", "expression", "issues", "strengths", "weak_paragraphs"],
+    "opinion_statement": ["speech_rate", "op_viewpoint", "op_structure", "op_logic", "op_time_rhythm", "op_expression"],
+    "impromptu_reaction": ["speech_rate", "ir_reaction_speed", "ir_structure", "ir_content_relevance", "ir_logic", "ir_expression"],
+    "story_reading": ["speech_rate", "sr_structure", "sr_logic", "sr_fluency", "sr_event_distribution"],
     # 绕口令：拆分成4个细粒度维度并行运行，提高速度
     "tongue_twister_reading": ["speech_rate", "tw_completeness", "tw_pronunciation", "tw_fluency", "tw_strengths"],
     "article_reading": ["speech_rate", "ar_completeness", "ar_pronunciation", "ar_fluency", "ar_pause", "ar_strengths"],
