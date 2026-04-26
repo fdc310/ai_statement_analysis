@@ -209,4 +209,5 @@ class ReportAgent(BaseAgent):
                 speech_rate=context.speech_rate,
                 audio_duration=context.audio_duration,
                 language=context.language,
+                reference_text=context.ref_text,
             )

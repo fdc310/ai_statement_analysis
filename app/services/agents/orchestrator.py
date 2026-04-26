@@ -12,6 +12,8 @@ from app.services.agents.soe_agent import SOEAgent
 from app.services.agents.content_agent import ContentAnalysisAgent
 from app.services.agents.fluency_agent import FluencyAnalysisAgent
 from app.services.agents.report_agent import ReportAgent
+from app.services.agents.dimension_agent import DimensionAgent
+from app.services.agents.dimensions import DIMENSION_REGISTRY, PIPELINE_DIMENSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,7 @@ class EvaluationOrchestrator:
     """
 
     # Pipeline definitions: evaluation_type -> list of agent names
+    # Dimension agents (dim_*) are registered dynamically from DIMENSION_REGISTRY
     PIPELINES = {
         "basic_evaluation": ["asr", "soe", "report"],
         "extended_evaluation": ["asr", "soe", "content", "fluency", "report"],
@@ -35,6 +38,7 @@ class EvaluationOrchestrator:
         "impromptu_reaction": ["asr", "soe", "content", "fluency", "report"],
         "story_reading": ["asr", "content", "fluency", "report"],
         "tongue_twister_reading": ["asr", "soe", "report"],
+        "article_reading": ["asr", "soe", "report"],
         "text_analysis": ["content"],
         "text_only": ["content"],
     }
@@ -56,6 +60,16 @@ class EvaluationOrchestrator:
             "fluency": FluencyAnalysisAgent(),
             "report": ReportAgent(),
         }
+
+        # Register dimension agents
+        for dim_name, (sys_fn, usr_fn) in DIMENSION_REGISTRY.items():
+            agent_name = f"dim_{dim_name}"
+            self._agents[agent_name] = DimensionAgent(
+                dim_name=agent_name,
+                system_prompt_fn=sys_fn,
+                user_prompt_fn=usr_fn,
+            )
+            self.DEPENDENCY_LEVELS[agent_name] = 1  # All at Level 1 (parallel)
 
     def get_agent(self, name: str) -> Optional[BaseAgent]:
         """Get an agent by name."""
@@ -190,7 +204,10 @@ class EvaluationOrchestrator:
 
         Designed for streaming where ASR and SOE are already completed
         by StreamingASR/StreamingSOE. Skips Level 0 agents and runs
-        Level 1 (content, fluency) then Level 2 (report).
+        Level 1 (content, fluency, dimension agents) then Level 2 (report).
+
+        If the pipeline has dimension agents defined in PIPELINE_DIMENSIONS,
+        those are used instead of the old monolithic agents.
 
         Args:
             pipeline_name: Pipeline name from PIPELINES dict
@@ -203,15 +220,23 @@ class EvaluationOrchestrator:
         Returns:
             Dictionary with agent results and final report
         """
-        agent_names = self.PIPELINES.get(pipeline_name)
-        if not agent_names:
-            raise ValueError(f"Unknown pipeline: {pipeline_name}. Available: {list(self.PIPELINES.keys())}")
+        # Check if this pipeline has dimension agents
+        dim_names = PIPELINE_DIMENSIONS.get(pipeline_name)
 
-        # Filter out Level 0 agents (asr, soe) — they're already done
-        remaining_agents = [
-            name for name in agent_names
-            if self.DEPENDENCY_LEVELS.get(name, 99) > 0
-        ]
+        if dim_names:
+            # Use dimension agents (all at Level 1, run in parallel)
+            remaining_agents = [f"dim_{d}" for d in dim_names]
+            logger.info(f"Running dimension agents for '{pipeline_name}': {remaining_agents}")
+        else:
+            # Fall back to traditional pipeline
+            agent_names = self.PIPELINES.get(pipeline_name)
+            if not agent_names:
+                raise ValueError(f"Unknown pipeline: {pipeline_name}. Available: {list(self.PIPELINES.keys())}")
+
+            remaining_agents = [
+                name for name in agent_names
+                if self.DEPENDENCY_LEVELS.get(name, 99) > 0
+            ]
 
         if not remaining_agents:
             logger.info(f"No remaining agents for pipeline '{pipeline_name}'")
@@ -222,7 +247,7 @@ class EvaluationOrchestrator:
         # Group remaining agents by dependency level
         levels: dict[int, list[str]] = {}
         for name in remaining_agents:
-            level = self.DEPENDENCY_LEVELS[name]
+            level = self.DEPENDENCY_LEVELS.get(name, 1)
             levels.setdefault(level, []).append(name)
 
         total_levels = len(levels)
@@ -272,7 +297,7 @@ class EvaluationOrchestrator:
             if agent_result:
                 result["agent_results"][name] = agent_result.model_dump()
 
-        # Convenience keys
+        # Convenience keys from traditional agents (if present)
         report_result = context.get_agent_result("report")
         if report_result and report_result.success:
             result["report"] = report_result.data.get("report", "")

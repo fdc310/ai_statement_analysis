@@ -437,7 +437,8 @@ def full_report_system_prompt(language: str = "zh", has_topic: bool = False) -> 
 - weak_paragraphs只包含有低分字词的段落
 - 论点和结论要从演讲内容中提取
 - 各维度的分析要具体、有针对性
-- strengths优点部分要写得详细具体，每条不少于15字，突出演讲者的闪光点"""
+- strengths优点部分要写得详细具体，每条不少于15字，突出演讲者的闪光点
+- 完整度评估应通过对比"语音转文字"内容与"参考原文"来判断，不要使用"发音评分"中的"完整度"分数，不要基于"音频时长"和"总字数"自行推断完整度问题"""
 
 
 def full_report_user_prompt(
@@ -449,7 +450,8 @@ def full_report_user_prompt(
     topic: Optional[str] = None,
     speech_rate: Optional[float] = None,
     audio_duration: Optional[float] = None,
-    language: str = "zh"
+    language: str = "zh",
+    reference_text: Optional[str] = None
 ) -> str:
     """User prompt for full JSON report."""
     rate_unit = "字/分钟" if language == "zh" else "词/分钟"
@@ -458,7 +460,16 @@ def full_report_user_prompt(
 ## 语音转文字内容
 
 {speech_text}
+"""
 
+    if reference_text:
+        prompt += f"""
+## 参考原文
+
+{reference_text}
+"""
+
+    prompt += f"""
 ## 语音评分数据
 
 - 发音准确度: {speech_scores.get('pronunciation_accuracy', 0)}分

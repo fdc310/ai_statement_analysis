@@ -20,6 +20,10 @@ def extract_json(content: str) -> dict:
     if not content:
         return {}
 
+    # Pre-process: strip stray % symbols from numbers (e.g. "accuracy_rate": 95.5% -> 95.5)
+    # This handles LLM outputs that include % in numeric values
+    content = re.sub(r'(\d+\.?\d*)\s*%', r'\1', content)
+
     # Strategy 1: Extract from markdown code block
     json_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?\s*```', content, re.DOTALL)
     if json_match:
