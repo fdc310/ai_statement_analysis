@@ -26,6 +26,7 @@ class StreamConfig(BaseModel):
     word_info: int = 1
     enable_asr: bool = True
     enable_soe: bool = True
+    enable_timestamps: bool = True
 
 
 class StreamResult(BaseModel):
@@ -79,7 +80,8 @@ class StreamingSession:
             self._asr = StreamingASR()
             await self._asr.start_recognition(
                 engine_type="16k_zh" if self.config.language == "zh" else "16k_en",
-                word_info=self.config.word_info
+                word_info=self.config.word_info,
+                enable_timestamps=self.config.enable_timestamps,
             )
 
         # Start SOE if enabled

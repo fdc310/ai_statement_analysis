@@ -38,3 +38,4 @@ class StreamConfig(BaseModel):
     word_info: int = 1
     enable_asr: bool = True
     enable_soe: bool = True
+    enable_timestamps: bool = True

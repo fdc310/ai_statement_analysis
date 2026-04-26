@@ -49,7 +49,8 @@ class StreamingASR:
     async def start_recognition(
         self,
         engine_type: str = "16k_zh",
-        word_info: int = 1
+        word_info: int = 1,
+        enable_timestamps: bool = True,
     ) -> str:
         """
         Start a real-time recognition session.
@@ -57,6 +58,7 @@ class StreamingASR:
         Args:
             engine_type: Recognition engine type
             word_info: Word info level (0=none, 1=words, 2=words+punctuation)
+            enable_timestamps: Whether to include sentence/word timestamps
 
         Returns:
             Session ID
@@ -141,7 +143,9 @@ class StreamingASR:
                 self.appid, credential, engine_type, listener
             )
             self._recognizer.set_voice_format(1)  # raw PCM (linear16)
-            self._recognizer.set_word_info(word_info)
+            # When timestamps disabled, force word_info to 0
+            effective_word_info = word_info if enable_timestamps else 0
+            self._recognizer.set_word_info(effective_word_info)
             self._recognizer.set_filter_dirty(0)
             self._recognizer.set_filter_modal(0)
             self._recognizer.set_filter_punc(0)
@@ -187,13 +191,24 @@ class StreamingASR:
             logger.warning("ASR Stream: timeout waiting for completion")
 
         # Drain remaining results
+        # on_recognition_complete has no result field, so we collect
+        # the last sentence_end which carries result (timestamps, word_list, etc.)
         final_result = {}
+        last_sentence_end = {}
         while not self._result_queue.empty():
             event = self._result_queue.get_nowait()
             if event["type"] == "complete":
                 final_result = event["data"]
+            elif event["type"] == "sentence_end":
+                last_sentence_end = event["data"]
             elif event["type"] == "error":
                 return {"error": event["data"]}
+
+        # Merge last sentence_end result into final result
+        if last_sentence_end:
+            result_data = last_sentence_end.get("result", {})
+            if result_data:
+                final_result["result"] = result_data
 
         # Inject accumulated text (on_recognition_complete has no text)
         final_result["accumulated_text"] = self._accumulated_text[0]
