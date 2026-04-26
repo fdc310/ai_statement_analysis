@@ -179,6 +179,7 @@ async def websocket_streaming_eval(
                                             "report": agent_results.get("report"),
                                             "content_analysis": agent_results.get("content_analysis"),
                                             "fluency_analysis": agent_results.get("fluency_analysis"),
+                                            "overall_score": agent_results.get("overall_score"),
                                         }
                                     })
                                 else:
