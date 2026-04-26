@@ -39,3 +39,12 @@ class StreamConfig(BaseModel):
     enable_asr: bool = True
     enable_soe: bool = True
     enable_timestamps: bool = True
+
+    # Multi-agent evaluation fields
+    eval_type: str = "basic_evaluation"
+    topic: str = ""
+    scenario: str = ""
+    reference_text: str = ""
+    report_format: str = "markdown"
+    custom_prompt: str = ""
+    progressive: bool = True

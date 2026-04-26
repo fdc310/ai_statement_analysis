@@ -4,6 +4,7 @@ Manages the lifecycle of a streaming evaluation session.
 """
 import asyncio
 import logging
+import string
 import uuid
 from typing import Optional, Callable, Awaitable
 
@@ -12,21 +13,15 @@ from pydantic import BaseModel, Field
 from app.services.streaming.asr_stream import StreamingASR
 from app.services.streaming.soe_stream import StreamingSOE
 from app.services.streaming.audio_buffer import AudioBuffer
+from app.schemas.streaming import StreamConfig
 
 logger = logging.getLogger(__name__)
 
+# PCM 16kHz 16bit mono: 32000 bytes/sec
+BYTES_PER_SEC = 32000
 
-class StreamConfig(BaseModel):
-    """Configuration for a streaming session."""
-    language: str = "zh"
-    ref_text: str = ""
-    eval_mode: int = 3
-    score_coeff: float = 1.0
-    server_type: int = 0
-    word_info: int = 1
-    enable_asr: bool = True
-    enable_soe: bool = True
-    enable_timestamps: bool = True
+# Chinese punctuation for speech rate calculation
+_ZH_PUNCTUATION = set(string.punctuation + '。，！？、；：""''（）【】《》…—')
 
 
 class StreamResult(BaseModel):
@@ -37,6 +32,12 @@ class StreamResult(BaseModel):
     speech_text: str = ""
     scores_data: dict = Field(default_factory=dict)
     audio_url: Optional[str] = None
+    word_info_list: list = Field(default_factory=list)
+    low_score_words: list = Field(default_factory=list)
+    statistics_data: dict = Field(default_factory=dict)
+    speech_rate: Optional[float] = None
+    audio_duration: Optional[float] = None
+    eval_type: str = "basic_evaluation"
 
 
 class StreamingSession:
@@ -130,7 +131,7 @@ class StreamingSession:
         Finish the session and return results.
 
         Returns:
-            StreamResult with ASR and SOE results
+            StreamResult with ASR, SOE results, and derived data
         """
         if self._finished:
             raise RuntimeError("Session already finished")
@@ -143,34 +144,59 @@ class StreamingSession:
         # Stop ASR and get final result
         asr_result = None
         speech_text = ""
+        word_info_list = []
         if self._asr:
             try:
                 asr_result = await self._asr.stop_recognition()
                 if asr_result and "error" not in asr_result:
-                    # Text accumulated from sentence_end events
                     speech_text = asr_result.get("accumulated_text", "")
+                    # Extract word-level timestamps from ASR result
+                    result_data = asr_result.get("result", {})
+                    word_info_list = result_data.get("WordList", [])
+                    if not word_info_list:
+                        word_info_list = asr_result.get("word_info_list", [])
             except Exception as e:
                 logger.error(f"ASR stop error: {e}")
 
         # Stop SOE and get final result
         soe_result = None
         scores_data = {}
+        low_score_words = []
+        statistics_data = {}
         if self._soe:
             try:
                 soe_result = await self._soe.stop_evaluation()
                 if soe_result and "error" not in soe_result:
-                    # Parse SOE result
                     from app.services.tencent.soe import SOEService
                     soe_service = SOEService()
                     parsed = soe_service.parse_evaluation_result(soe_result)
                     scores_data = parsed.get("scores", {})
+                    low_score_words = parsed.get("low_score_words", [])
+                    statistics_data = parsed.get("statistics", {})
             except Exception as e:
                 logger.error(f"SOE stop error: {e}")
+
+        # Get audio buffer (once, reused for duration + S3 upload)
+        audio_data = await self._buffer.get_full_buffer()
+
+        # Calculate audio duration from buffer size
+        audio_duration = None
+        if audio_data:
+            audio_duration = round(len(audio_data) / BYTES_PER_SEC, 2)
+
+        # Calculate speech rate (chars/min for Chinese, words/min for English)
+        speech_rate = None
+        if audio_duration and audio_duration > 0 and speech_text:
+            if self.config.language == "zh":
+                char_count = len([c for c in speech_text if c not in _ZH_PUNCTUATION and not c.isspace()])
+            else:
+                char_count = len(speech_text.split())
+            if char_count > 0:
+                speech_rate = round(char_count / (audio_duration / 60), 1)
 
         # Upload audio to S3
         audio_url = None
         try:
-            audio_data = await self._buffer.get_full_buffer()
             if audio_data:
                 from app.services.s3_storage import s3_storage
                 upload_result = s3_storage.upload_bytes(
@@ -196,6 +222,12 @@ class StreamingSession:
             speech_text=speech_text,
             scores_data=scores_data,
             audio_url=audio_url,
+            word_info_list=word_info_list,
+            low_score_words=low_score_words,
+            statistics_data=statistics_data,
+            speech_rate=speech_rate,
+            audio_duration=audio_duration,
+            eval_type=self.config.eval_type,
         )
 
         logger.info(f"Streaming session {self.session_id} completed")

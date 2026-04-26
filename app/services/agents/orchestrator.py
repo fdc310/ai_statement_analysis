@@ -178,6 +178,138 @@ class EvaluationOrchestrator:
         logger.info(f"Pipeline '{pipeline_name}' completed successfully")
         return final_result
 
+    async def run_remaining_agents(
+        self,
+        pipeline_name: str,
+        context: EvaluationContext,
+        progress_callback: Optional[ProgressCallback] = None,
+        on_agent_result: Optional[Callable[[str, AgentResult], Awaitable[None]]] = None,
+    ) -> dict:
+        """
+        Run only the post-ASR/SOE agents (Level 1+) for a streaming session.
+
+        Designed for streaming where ASR and SOE are already completed
+        by StreamingASR/StreamingSOE. Skips Level 0 agents and runs
+        Level 1 (content, fluency) then Level 2 (report).
+
+        Args:
+            pipeline_name: Pipeline name from PIPELINES dict
+            context: Pre-built EvaluationContext with ASR/SOE data already populated
+            progress_callback: Async callback for level-level progress
+            on_agent_result: Async callback after each agent completes,
+                             receives (agent_name, AgentResult). Used for
+                             progressive WebSocket streaming.
+
+        Returns:
+            Dictionary with agent results and final report
+        """
+        agent_names = self.PIPELINES.get(pipeline_name)
+        if not agent_names:
+            raise ValueError(f"Unknown pipeline: {pipeline_name}. Available: {list(self.PIPELINES.keys())}")
+
+        # Filter out Level 0 agents (asr, soe) — they're already done
+        remaining_agents = [
+            name for name in agent_names
+            if self.DEPENDENCY_LEVELS.get(name, 99) > 0
+        ]
+
+        if not remaining_agents:
+            logger.info(f"No remaining agents for pipeline '{pipeline_name}'")
+            return {}
+
+        logger.info(f"Running remaining agents for '{pipeline_name}': {remaining_agents}")
+
+        # Group remaining agents by dependency level
+        levels: dict[int, list[str]] = {}
+        for name in remaining_agents:
+            level = self.DEPENDENCY_LEVELS[name]
+            levels.setdefault(level, []).append(name)
+
+        total_levels = len(levels)
+        for level_idx, (level, names) in enumerate(sorted(levels.items())):
+            progress = level_idx / total_levels
+            if progress_callback:
+                await progress_callback(
+                    f"level_{level}", progress,
+                    f"Running agents: {', '.join(names)}"
+                )
+
+            logger.info(f"Level {level}: Running {names}")
+
+            # Run agents at this level in parallel
+            tasks = []
+            for name in names:
+                agent = self._agents.get(name)
+                if agent:
+                    tasks.append(self._run_and_notify(agent, context, on_agent_result))
+                else:
+                    logger.warning(f"Agent '{name}' not found, skipping")
+
+            if tasks:
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                for i, result in enumerate(results):
+                    if isinstance(result, Exception):
+                        logger.error(f"Agent '{names[i]}' raised exception: {result}")
+                        context.set_agent_result(
+                            names[i],
+                            AgentResult(
+                                agent_name=names[i],
+                                success=False,
+                                error=str(result)
+                            )
+                        )
+
+        # Collect results
+        result = {
+            "pipeline": pipeline_name,
+            "agents_executed": remaining_agents,
+            "agent_results": {},
+        }
+
+        for name in remaining_agents:
+            agent_result = context.get_agent_result(name)
+            if agent_result:
+                result["agent_results"][name] = agent_result.model_dump()
+
+        # Convenience keys
+        report_result = context.get_agent_result("report")
+        if report_result and report_result.success:
+            result["report"] = report_result.data.get("report", "")
+
+        content_result = context.get_agent_result("content")
+        if content_result and content_result.success:
+            result["content_analysis"] = content_result.data
+
+        fluency_result = context.get_agent_result("fluency")
+        if fluency_result and fluency_result.success:
+            result["fluency_analysis"] = fluency_result.data
+
+        result["speech_rate"] = context.speech_rate
+        result["statistics_data"] = context.statistics_data
+        result["low_score_words"] = context.low_score_words
+
+        if progress_callback:
+            await progress_callback("done", 1.0, "Post-stream agents completed")
+
+        logger.info(f"Remaining agents for '{pipeline_name}' completed")
+        return result
+
+    async def _run_and_notify(
+        self,
+        agent: BaseAgent,
+        context: EvaluationContext,
+        on_agent_result: Optional[Callable[[str, AgentResult], Awaitable[None]]] = None,
+    ) -> AgentResult:
+        """Run an agent and notify callback on completion."""
+        result = await agent._run(context)
+        if on_agent_result:
+            try:
+                await on_agent_result(agent.name, result)
+            except Exception as e:
+                logger.error(f"Agent result callback error for '{agent.name}': {e}")
+        return result
+
 
 # Singleton
 orchestrator = EvaluationOrchestrator()

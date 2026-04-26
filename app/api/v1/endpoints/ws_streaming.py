@@ -82,20 +82,120 @@ async def websocket_streaming_eval(
                             logger.info(f"Session started: {session.session_id}")
 
                         elif msg_type == "end":
-                            # Finish session and send final results
+                            # Finish session and send results
                             if session:
                                 result = await session.finish()
+
+                                # Step 1: Send streaming results immediately
                                 await websocket.send_json({
-                                    "type": "complete",
+                                    "type": "streaming_complete",
                                     "data": {
                                         "session_id": result.session_id,
                                         "speech_text": result.speech_text,
                                         "scores_data": result.scores_data,
+                                        "word_info_list": result.word_info_list,
+                                        "low_score_words": result.low_score_words,
+                                        "statistics_data": result.statistics_data,
+                                        "speech_rate": result.speech_rate,
+                                        "audio_duration": result.audio_duration,
+                                        "audio_url": result.audio_url,
                                         "asr_result": result.asr_result,
                                         "soe_result": result.soe_result,
-                                        "audio_url": result.audio_url,
                                     }
                                 })
+
+                                # Step 2: Run post-stream agents if eval_type is set
+                                eval_type = session.config.eval_type
+                                if eval_type and eval_type != "none":
+                                    from app.services.agents.base_agent import EvaluationContext
+                                    from app.services.agents.orchestrator import orchestrator
+
+                                    request_data = {
+                                        "language": session.config.language,
+                                        "ref_text": session.config.ref_text,
+                                        "eval_mode": session.config.eval_mode,
+                                        "score_coeff": session.config.score_coeff,
+                                        "server_type": session.config.server_type,
+                                        "eval_type": eval_type,
+                                        "topic": session.config.topic or session.config.scenario,
+                                        "scenario": session.config.scenario,
+                                        "reference_text": session.config.reference_text,
+                                        "report_format": session.config.report_format,
+                                        "custom_prompt": session.config.custom_prompt,
+                                        "word_info": session.config.word_info,
+                                    }
+
+                                    context = EvaluationContext(request_data)
+                                    context.speech_text = result.speech_text
+                                    context.word_info_list = result.word_info_list
+                                    context.soe_result = result.soe_result
+                                    context.scores_data = result.scores_data
+                                    context.low_score_words = result.low_score_words
+                                    context.statistics_data = result.statistics_data
+                                    context.speech_rate = result.speech_rate
+                                    context.audio_duration = result.audio_duration
+                                    context.audio_url = result.audio_url
+
+                                    if session.config.progressive:
+                                        # Progressive: send each agent result as it completes
+                                        async def on_agent_result(agent_name, agent_result):
+                                            try:
+                                                await websocket.send_json({
+                                                    "type": "agent_result",
+                                                    "data": {
+                                                        "agent": agent_name,
+                                                        "success": agent_result.success,
+                                                        "result": agent_result.data,
+                                                        "duration_ms": agent_result.duration_ms,
+                                                        "error": agent_result.error,
+                                                    }
+                                                })
+                                            except Exception:
+                                                pass
+
+                                        agent_results = await orchestrator.run_remaining_agents(
+                                            pipeline_name=eval_type,
+                                            context=context,
+                                            on_agent_result=on_agent_result,
+                                        )
+                                    else:
+                                        # One-shot: wait for all agents
+                                        agent_results = await orchestrator.run_remaining_agents(
+                                            pipeline_name=eval_type,
+                                            context=context,
+                                        )
+
+                                    # Final complete with all data
+                                    await websocket.send_json({
+                                        "type": "complete",
+                                        "data": {
+                                            "session_id": result.session_id,
+                                            "speech_text": result.speech_text,
+                                            "scores_data": result.scores_data,
+                                            "statistics_data": result.statistics_data,
+                                            "low_score_words": result.low_score_words,
+                                            "speech_rate": result.speech_rate,
+                                            "audio_url": result.audio_url,
+                                            "report": agent_results.get("report"),
+                                            "content_analysis": agent_results.get("content_analysis"),
+                                            "fluency_analysis": agent_results.get("fluency_analysis"),
+                                        }
+                                    })
+                                else:
+                                    # No agents — send basic complete
+                                    await websocket.send_json({
+                                        "type": "complete",
+                                        "data": {
+                                            "session_id": result.session_id,
+                                            "speech_text": result.speech_text,
+                                            "scores_data": result.scores_data,
+                                            "statistics_data": result.statistics_data,
+                                            "low_score_words": result.low_score_words,
+                                            "speech_rate": result.speech_rate,
+                                            "audio_url": result.audio_url,
+                                        }
+                                    })
+
                                 logger.info(f"Session completed: {session.session_id}")
                             else:
                                 await websocket.send_json({

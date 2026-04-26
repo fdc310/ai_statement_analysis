@@ -5,6 +5,8 @@ Contains: basic, extended, simple JSON, and full JSON report prompts.
 """
 from typing import Optional
 
+from app.services.agents.prompts.common import build_word_info_table
+
 
 # ============================================================
 # Basic Evaluation Report (JSON format)
@@ -289,6 +291,7 @@ def simple_report_system_prompt(language: str = "zh") -> str:
 def simple_report_user_prompt(
     speech_text: str,
     speech_scores: dict,
+    word_info_list: Optional[list] = None,
     low_score_words: Optional[list] = None,
     speech_rate: Optional[float] = None,
     audio_duration: Optional[float] = None,
@@ -440,6 +443,7 @@ def full_report_system_prompt(language: str = "zh", has_topic: bool = False) -> 
 def full_report_user_prompt(
     speech_text: str,
     speech_scores: dict,
+    word_info_list: Optional[list] = None,
     low_score_words: Optional[list] = None,
     statistics: Optional[dict] = None,
     topic: Optional[str] = None,
@@ -492,6 +496,13 @@ def full_report_user_prompt(
 """
         for word in low_score_words[:20]:
             prompt += f"- {word.get('word', '')}: 准确度{word.get('accuracy', 0)}分, 流利度{word.get('fluency', 0)}分\n"
+
+    if word_info_list and len(word_info_list) > 0:
+        prompt += """
+## 词语时间戳
+
+"""
+        prompt += build_word_info_table(word_info_list)
 
     prompt += """
 请根据以上信息生成评测报告，包含：

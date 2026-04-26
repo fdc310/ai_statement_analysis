@@ -1,7 +1,7 @@
 from app.services.streaming.asr_stream import StreamingASR
 from app.services.streaming.soe_stream import StreamingSOE
 from app.services.streaming.audio_buffer import AudioBuffer
-from app.services.streaming.session_manager import StreamingSession, StreamConfig
+from app.services.streaming.session_manager import StreamingSession, StreamConfig, StreamResult
 
 __all__ = [
     "StreamingASR",
@@ -9,4 +9,5 @@ __all__ = [
     "AudioBuffer",
     "StreamingSession",
     "StreamConfig",
+    "StreamResult",
 ]
