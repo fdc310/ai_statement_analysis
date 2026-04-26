@@ -145,9 +145,8 @@ class StreamingSession:
             try:
                 asr_result = await self._asr.stop_recognition()
                 if asr_result and "error" not in asr_result:
-                    # Extract text from result
-                    if "result" in asr_result:
-                        speech_text = asr_result["result"].get("text", "")
+                    # Text accumulated from sentence_end events
+                    speech_text = asr_result.get("accumulated_text", "")
             except Exception as e:
                 logger.error(f"ASR stop error: {e}")
 

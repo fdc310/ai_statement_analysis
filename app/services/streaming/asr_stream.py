@@ -44,6 +44,7 @@ class StreamingASR:
         self._result_queue: asyncio.Queue = asyncio.Queue()
         self._completed = threading.Event()
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._accumulated_text = [""]  # [text] — list for mutability across threads
 
     async def start_recognition(
         self,
@@ -62,6 +63,7 @@ class StreamingASR:
         """
         self._completed.clear()
         self._result_queue = asyncio.Queue()
+        self._accumulated_text = [""]
         self._loop = asyncio.get_running_loop()
 
         credential = Credential(self.secret_id, self.secret_key)
@@ -69,9 +71,10 @@ class StreamingASR:
         loop = self._loop
 
         class StreamListener(SpeechRecognitionListener):
-            def __init__(self, queue, completed_event):
+            def __init__(self, queue, completed_event, accumulated_text_ref):
                 self._queue = queue
                 self._completed = completed_event
+                self._accumulated_text = accumulated_text_ref
 
             def on_sentence_begin(self, response):
                 logger.debug(f"ASR Stream: sentence begin")
@@ -95,6 +98,12 @@ class StreamingASR:
 
             def on_sentence_end(self, response):
                 logger.debug(f"ASR Stream: sentence end")
+                # Accumulate text from sentence end result
+                result = response.get("result", {})
+                if isinstance(result, dict):
+                    text = result.get("voice_text_str", "")
+                    if text:
+                        self._accumulated_text[0] += text
                 try:
                     loop.call_soon_threadsafe(
                         self._queue.put_nowait,
@@ -125,13 +134,13 @@ class StreamingASR:
                 except RuntimeError:
                     pass
 
-        listener = StreamListener(self._result_queue, self._completed)
+        listener = StreamListener(self._result_queue, self._completed, self._accumulated_text)
 
         def create_recognizer():
             self._recognizer = SpeechRecognizer(
                 self.appid, credential, engine_type, listener
             )
-            self._recognizer.set_speaker_id(0)
+            self._recognizer.set_voice_format(1)  # raw PCM (linear16)
             self._recognizer.set_word_info(word_info)
             self._recognizer.set_filter_dirty(0)
             self._recognizer.set_filter_modal(0)
@@ -186,6 +195,8 @@ class StreamingASR:
             elif event["type"] == "error":
                 return {"error": event["data"]}
 
+        # Inject accumulated text (on_recognition_complete has no text)
+        final_result["accumulated_text"] = self._accumulated_text[0]
         return final_result
 
     async def get_results(self) -> AsyncGenerator[dict, None]:
