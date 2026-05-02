@@ -14,6 +14,9 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Maximum number of messages to keep in session history
+_MAX_SESSION_MESSAGES = 50
+
 # Scene presets
 VOICE_CHAT_SCENE_PROMPTS = {
     "interview": """你是一位经验丰富的面试官。你的任务是模拟面试场景，对用户进行面试评估。
@@ -140,11 +143,14 @@ class ChatSessionManager:
             return session
 
     async def append_message(self, session_id: str, role: str, content: str) -> None:
-        """Append a message to session history."""
+        """Append a message to session history, trimming oldest if over limit."""
         async with self._lock:
             session = self._sessions.get(session_id)
             if session:
                 session.messages.append({"role": role, "content": content})
+                # Trim oldest messages if over limit (keep most recent)
+                if len(session.messages) > _MAX_SESSION_MESSAGES:
+                    session.messages = session.messages[-_MAX_SESSION_MESSAGES:]
                 session.last_active = datetime.now()
 
     async def delete_session(self, session_id: str) -> None:

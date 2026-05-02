@@ -3,8 +3,6 @@
 Tencent Cloud TTS (Text-to-Speech) service using WebSocket SDK.
 Uses FlowingSpeechSynthesizer for streaming synthesis without character limits.
 """
-import sys
-import os
 import queue
 import re
 import threading
@@ -12,11 +10,7 @@ import time
 from typing import Optional, AsyncGenerator
 
 from app.core.thread_pool import ThreadPool
-
-# Add SDK path to sys.path
-SDK_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "core", "util", "tencentcloud-speech-sdk-python")
-if SDK_PATH not in sys.path:
-    sys.path.insert(0, SDK_PATH)
+from app.core.sdk_path import SDK_PATH  # noqa: F401 — ensures SDK is on sys.path
 
 from common.credential import Credential
 from tts.flowing_speech_synthesizer import FlowingSpeechSynthesizer, FlowingSpeechSynthesisListener

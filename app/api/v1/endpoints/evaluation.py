@@ -251,9 +251,12 @@ async def evaluate_speech(
                     status_code=404,
                     detail=f"Audio file not found: {request.audio_path}"
                 )
-            audio_data = await asyncio.to_thread(
-                lambda: open(request.audio_path, "rb").read()
-            )
+
+            def _read_file(path: str) -> bytes:
+                with open(path, "rb") as f:
+                    return f.read()
+
+            audio_data = await asyncio.to_thread(_read_file, request.audio_path)
 
         # Determine engine type based on language
         engine_type = "16k_zh" if request.language == "zh" else "16k_en"

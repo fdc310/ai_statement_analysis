@@ -10,6 +10,8 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 
 from app.services.streaming.session_manager import StreamingSession
 from app.schemas.streaming import StreamConfig, StreamResultMessage
+from app.core.config import settings
+from app.core.security import aes_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -24,7 +26,7 @@ async def websocket_streaming_eval(
     WebSocket endpoint for real-time audio streaming evaluation.
 
     Protocol:
-    1. Client connects (optionally with auth token)
+    1. Client connects with ?token=<AES signature>
     2. Client sends config: {"type": "config", "data": {"language": "zh", ...}}
     3. Client sends audio: binary frames (raw PCM 16kHz 16bit mono bytes)
     4. Client sends end: {"type": "end"}
@@ -35,6 +37,17 @@ async def websocket_streaming_eval(
        - {"type": "error", "message": "..."}
     """
     await websocket.accept()
+
+    # Authenticate via AES signature in query param
+    if not token:
+        await websocket.close(code=4001, reason="Missing token")
+        return
+    success, message = aes_service.verify_signature(token, max_age_seconds=settings.request_expire_seconds)
+    if not success:
+        await websocket.close(code=4003, reason="Unauthorized")
+        logger.warning(f"WS stream auth failed: {message}")
+        return
+
     logger.info("WebSocket client connected")
 
     session: Optional[StreamingSession] = None
@@ -45,28 +58,38 @@ async def websocket_streaming_eval(
 
             if message["type"] == "websocket.receive":
                 if "text" in message:
-                    # Text message (JSON)
                     try:
                         data = json.loads(message["text"])
                         msg_type = data.get("type", "")
 
                         if msg_type == "config":
-                            # Initialize session with config
                             config_data = data.get("data", {})
                             config = StreamConfig(**config_data)
 
-                            # Create callbacks for real-time updates
-                            async def on_asr_partial(event):
-                                await websocket.send_json({
-                                    "type": "asr_partial",
-                                    "data": event.get("data", {})
-                                })
+                            async def _make_on_asr_partial(ws: WebSocket):
+                                async def on_asr_partial(event):
+                                    try:
+                                        await ws.send_json({
+                                            "type": "asr_partial",
+                                            "data": event.get("data", {})
+                                        })
+                                    except Exception:
+                                        pass
+                                return on_asr_partial
 
-                            async def on_soe_intermediate(event):
-                                await websocket.send_json({
-                                    "type": "soe_intermediate",
-                                    "data": event.get("data", {})
-                                })
+                            async def _make_on_soe_intermediate(ws: WebSocket):
+                                async def on_soe_intermediate(event):
+                                    try:
+                                        await ws.send_json({
+                                            "type": "soe_intermediate",
+                                            "data": event.get("data", {})
+                                        })
+                                    except Exception:
+                                        pass
+                                return on_soe_intermediate
+
+                            on_asr_partial = await _make_on_asr_partial(websocket)
+                            on_soe_intermediate = await _make_on_soe_intermediate(websocket)
 
                             session = StreamingSession(
                                 config=config,
@@ -82,11 +105,9 @@ async def websocket_streaming_eval(
                             logger.info(f"Session started: {session.session_id}")
 
                         elif msg_type == "end":
-                            # Finish session and send results
                             if session:
                                 result = await session.finish()
 
-                                # Step 1: Send streaming results immediately
                                 await websocket.send_json({
                                     "type": "streaming_complete",
                                     "data": {
@@ -104,7 +125,6 @@ async def websocket_streaming_eval(
                                     }
                                 })
 
-                                # Step 2: Run post-stream agents if eval_type is set
                                 eval_type = session.config.eval_type
                                 if eval_type and eval_type != "none":
                                     from app.services.agents.base_agent import EvaluationContext
@@ -137,35 +157,35 @@ async def websocket_streaming_eval(
                                     context.audio_url = result.audio_url
 
                                     if session.config.progressive:
-                                        # Progressive: send each agent result as it completes
-                                        async def on_agent_result(agent_name, agent_result):
-                                            try:
-                                                await websocket.send_json({
-                                                    "type": "agent_result",
-                                                    "data": {
-                                                        "agent": agent_name,
-                                                        "success": agent_result.success,
-                                                        "result": agent_result.data,
-                                                        "duration_ms": agent_result.duration_ms,
-                                                        "error": agent_result.error,
-                                                    }
-                                                })
-                                            except Exception:
-                                                pass
+                                        async def _make_on_agent_result(ws: WebSocket):
+                                            async def on_agent_result(agent_name, agent_result):
+                                                try:
+                                                    await ws.send_json({
+                                                        "type": "agent_result",
+                                                        "data": {
+                                                            "agent": agent_name,
+                                                            "success": agent_result.success,
+                                                            "result": agent_result.data,
+                                                            "duration_ms": agent_result.duration_ms,
+                                                            "error": agent_result.error,
+                                                        }
+                                                    })
+                                                except Exception as e:
+                                                    logger.error(f"send agent_result error: {e}")
+                                            return on_agent_result
 
+                                        on_agent_result = await _make_on_agent_result(websocket)
                                         agent_results = await orchestrator.run_remaining_agents(
                                             pipeline_name=eval_type,
                                             context=context,
                                             on_agent_result=on_agent_result,
                                         )
                                     else:
-                                        # One-shot: wait for all agents
                                         agent_results = await orchestrator.run_remaining_agents(
                                             pipeline_name=eval_type,
                                             context=context,
                                         )
 
-                                    # Final complete with all data
                                     await websocket.send_json({
                                         "type": "complete",
                                         "data": {
@@ -184,7 +204,6 @@ async def websocket_streaming_eval(
                                         }
                                     })
                                 else:
-                                    # No agents — send basic complete
                                     await websocket.send_json({
                                         "type": "complete",
                                         "data": {
@@ -211,14 +230,13 @@ async def websocket_streaming_eval(
                                 "message": f"Unknown message type: {msg_type}"
                             })
 
-                    except json.JSONDecodeError as e:
+                    except json.JSONDecodeError:
                         await websocket.send_json({
                             "type": "error",
-                            "message": f"Invalid JSON: {e}"
+                            "message": "Invalid JSON format"
                         })
 
                 elif "bytes" in message:
-                    # Binary message (audio data)
                     if session:
                         await session.feed_audio(message["bytes"])
                     else:
@@ -230,17 +248,17 @@ async def websocket_streaming_eval(
     except WebSocketDisconnect:
         logger.info("WebSocket client disconnected")
     except Exception as e:
-        logger.error(f"WebSocket error: {e}")
+        logger.error(f"WebSocket error: {e}", exc_info=True)
         try:
             await websocket.send_json({
                 "type": "error",
-                "message": str(e)
+                "message": "Internal server error"
             })
-        except:
+        except Exception:
             pass
     finally:
         if session and not session._finished:
             try:
                 await session.finish()
-            except:
-                pass
+            except Exception as e:
+                logger.error(f"WS stream session cleanup error: {e}")

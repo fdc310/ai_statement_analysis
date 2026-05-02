@@ -16,8 +16,6 @@ import json
 import logging
 import re
 import base64
-import sys
-import os
 import queue
 import threading
 import uuid
@@ -28,17 +26,14 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from app.services.streaming.session_manager import StreamingSession
 from app.schemas.streaming_chat import StreamChatConfig
 from app.core.config import settings
+from app.core.security import aes_service
+from app.core.sdk_path import SDK_PATH  # noqa: F401 — ensures SDK is on sys.path
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _SENTENCE_RE = re.compile(r'(?<=[。！？\n])')
 _PAUSE_RE = re.compile(r'(?<=[，、；])')
-
-# Import TTS SDK
-SDK_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "..", "core", "util", "tencentcloud-speech-sdk-python")
-if SDK_PATH not in sys.path:
-    sys.path.insert(0, SDK_PATH)
 
 from common.credential import Credential
 from tts.flowing_speech_synthesizer import FlowingSpeechSynthesizer, FlowingSpeechSynthesisListener
@@ -51,12 +46,14 @@ class _ChatTTSListener(FlowingSpeechSynthesisListener):
         self._audio_queue: queue.Queue = queue.Queue()
         self._done = False
         self._error = None
+        self._lock = threading.Lock()
 
     def on_synthesis_start(self, session_id):
         pass
 
     def on_synthesis_end(self):
-        self._done = True
+        with self._lock:
+            self._done = True
         self._audio_queue.put(None)  # sentinel
 
     def on_audio_result(self, audio_bytes):
@@ -66,8 +63,9 @@ class _ChatTTSListener(FlowingSpeechSynthesisListener):
         pass
 
     def on_synthesis_fail(self, response):
-        self._error = f"TTS failed: code={response.get('code')}, msg={response.get('message')}"
-        self._done = True
+        with self._lock:
+            self._error = f"TTS failed: code={response.get('code')}, msg={response.get('message')}"
+            self._done = True
         self._audio_queue.put(None)
 
 
@@ -80,7 +78,7 @@ async def websocket_streaming_chat(
     WebSocket endpoint for streaming voice chat.
 
     Protocol:
-    1. Client connects
+    1. Client connects with ?token=<AES signature>
     2. Client sends config: {"type":"config","data":{...}}
     3. Client sends audio: binary PCM frames
     4. Client sends end: {"type":"end"}
@@ -92,9 +90,21 @@ async def websocket_streaming_chat(
        - {"type":"error","message":"..."}
     """
     await websocket.accept()
+
+    # Authenticate via AES signature in query param
+    if not token:
+        await websocket.close(code=4001, reason="Missing token")
+        return
+    success, message = aes_service.verify_signature(token, max_age_seconds=settings.request_expire_seconds)
+    if not success:
+        await websocket.close(code=4003, reason="Unauthorized")
+        logger.warning(f"WS chat auth failed: {message}")
+        return
+
     logger.info("WS chat client connected")
 
     session: Optional[StreamingSession] = None
+    config: Optional[StreamChatConfig] = None
 
     try:
         while True:
@@ -110,15 +120,18 @@ async def websocket_streaming_chat(
                             config_data = data.get("data", {})
                             config = StreamChatConfig(**config_data)
 
-                            async def on_asr_partial(event):
-                                try:
-                                    await websocket.send_json({
-                                        "type": "asr_partial",
-                                        "data": event.get("data", {}),
-                                    })
-                                except Exception:
-                                    pass
+                            async def _make_on_asr_partial(ws: WebSocket):
+                                async def on_asr_partial(event):
+                                    try:
+                                        await ws.send_json({
+                                            "type": "asr_partial",
+                                            "data": event.get("data", {}),
+                                        })
+                                    except Exception:
+                                        pass
+                                return on_asr_partial
 
+                            on_asr_partial = await _make_on_asr_partial(websocket)
                             session = StreamingSession(
                                 config=config,
                                 on_asr_partial=on_asr_partial,
@@ -148,10 +161,10 @@ async def websocket_streaming_chat(
                                 "message": f"Unknown message type: {msg_type}",
                             })
 
-                    except json.JSONDecodeError as e:
+                    except json.JSONDecodeError:
                         await websocket.send_json({
                             "type": "error",
-                            "message": f"Invalid JSON: {e}",
+                            "message": "Invalid JSON format",
                         })
 
                 elif "bytes" in message:
@@ -168,15 +181,15 @@ async def websocket_streaming_chat(
     except Exception as e:
         logger.error(f"WS chat error: {e}", exc_info=True)
         try:
-            await websocket.send_json({"type": "error", "message": str(e)})
+            await websocket.send_json({"type": "error", "message": "Internal server error"})
         except Exception:
             pass
     finally:
         if session and not session._finished:
             try:
                 await session.finish()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(f"WS chat session cleanup error: {e}")
 
 
 async def _handle_end(websocket: WebSocket, session: StreamingSession, config: StreamChatConfig):
@@ -206,7 +219,6 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
         DEFAULT_VOICE_CHAT_PROMPT,
     )
     from app.services import get_llm_service
-    from app.services.tencent import tts_service
 
     scene = config.scene or ""
     system_prompt = config.system_prompt or ""
@@ -227,23 +239,16 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
     voice_type = config.voice_type or 101001
 
     # ── Phase 3: LLM stream + persistent TTS connection ─────────────────
-    # ONE TTS WebSocket connection. LLM feeds text in, audio comes out.
-    # We keep the connection alive by NOT calling complete() until the LLM
-    # is done. Periodic empty process() calls serve as heartbeats.
-    # NOTE: tts_text_queue must be queue.Queue (not asyncio.Queue) because
-    #       the TTS worker runs in a daemon thread.
     llm = get_llm_service()
     tts_text_queue: queue.Queue = queue.Queue()
     tts_audio_queue: asyncio.Queue = asyncio.Queue()
+    tts_collected_chunks: list[bytes] = []  # collect raw audio for final upload
+    tts_error_holder: list[str] = []  # capture TTS error for caller
     llm_full_text: list[str] = []
+    tts_stop_event = threading.Event()
 
     def _tts_persistent_worker():
-        """
-        Runs in a daemon thread. Creates ONE TTS WebSocket connection,
-        reads text from tts_text_queue, feeds to TTS via process(),
-        collects audio from listener, puts into tts_audio_queue.
-        Only calls complete() when LLM is done (None signal received).
-        """
+        """Daemon thread: ONE TTS WebSocket connection, reads text → produces audio."""
         import time as _time
 
         listener = _ChatTTSListener()
@@ -268,14 +273,10 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
 
         last_feed_time = _time.time()
 
-        # Feed text chunks into the single connection
-        # NOTE: run_llm_stream already splits at sentence/pause boundaries,
-        # so we do NOT split again here. Just send directly to process().
-        while True:
+        while not tts_stop_event.is_set():
             try:
                 text = tts_text_queue.get(timeout=0.05)
             except queue.Empty:
-                # Queue empty — send heartbeat to keep connection alive
                 now = _time.time()
                 if now - last_feed_time > 20:
                     try:
@@ -286,22 +287,17 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
                 continue
 
             if text is None:
-                # End signal from LLM — flush and close
                 break
 
-            # Send text directly — no double splitting
             synthesizer.process(text)
             last_feed_time = _time.time()
-            # Small delay to let TTS server process before next chunk
             _time.sleep(0.05)
 
-        # Tell TTS server we're done — it will send FINAL frame
         try:
             synthesizer.complete()
         except Exception as e:
             logger.error(f"TTS complete() failed: {e}")
 
-        # Wait for synthesis to finish
         synthesizer.wait()
 
         # Drain remaining audio from listener queue
@@ -310,15 +306,17 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
                 chunk = listener._audio_queue.get(timeout=0.5)
                 if chunk is None:
                     break
+                tts_collected_chunks.append(chunk)  # save raw bytes for upload
                 tts_audio_queue.put_nowait({"audio": base64.b64encode(chunk).decode("utf-8")})
             except queue.Empty:
                 break
 
         if listener._error:
             logger.error(f"TTS error: {listener._error}")
+            tts_error_holder.append(listener._error)
 
         logger.info("TTS persistent connection closed")
-        tts_audio_queue.put_nowait(None)  # sentinel for sender
+        tts_audio_queue.put_nowait(None)
 
     async def run_llm_stream():
         """Stream LLM response, send llm_delta to client, feed TTS on sentence boundaries."""
@@ -328,13 +326,11 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
                 llm_full_text.append(delta)
                 sentence_buffer += delta
 
-                # Send llm_delta to client immediately
                 await websocket.send_json({
                     "type": "llm_delta",
                     "data": {"text": delta},
                 })
 
-                # Split at sentence endings
                 parts = _SENTENCE_RE.split(sentence_buffer)
                 if len(parts) > 1:
                     to_send = "".join(parts[:-1])
@@ -342,7 +338,6 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
                     if to_send.strip():
                         tts_text_queue.put_nowait(to_send)
 
-                # Split at mid-sentence pauses if buffer is large
                 elif len(sentence_buffer) > 80:
                     mid_parts = _PAUSE_RE.split(sentence_buffer)
                     if len(mid_parts) > 1:
@@ -354,10 +349,8 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
         except Exception as e:
             logger.error(f"LLM stream error: {e}")
         finally:
-            # Flush remaining text
             if sentence_buffer.strip():
                 tts_text_queue.put_nowait(sentence_buffer)
-            # Signal TTS worker that LLM is done (always, even on error)
             tts_text_queue.put_nowait(None)
 
     async def send_tts_chunks():
@@ -368,42 +361,52 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
                 break
             try:
                 await websocket.send_json({"type": "tts_chunk", "data": item})
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(f"send_tts_chunks error: {e}")
 
-    # Start all three concurrently:
-    # - tts_thread: persistent TTS connection, reads text → produces audio
-    # - tts_sender: reads tts_audio_queue → sends tts_chunk to client (starts NOW)
-    # - llm_task: streams LLM → sends llm_delta + feeds tts_text_queue
     tts_thread = threading.Thread(target=_tts_persistent_worker, daemon=True)
     tts_thread.start()
 
     tts_sender = asyncio.create_task(send_tts_chunks())
     llm_task = asyncio.create_task(run_llm_stream())
 
-    # Wait for LLM to finish (this signals TTS thread to complete)
-    await llm_task
-
-    # Wait for TTS thread to finish and sender to drain
-    await tts_sender
+    try:
+        await llm_task
+        await tts_sender
+    except asyncio.CancelledError:
+        # Client disconnected — signal TTS thread to stop immediately
+        tts_stop_event.set()
+        # Drain the text queue so TTS thread doesn't block on get()
+        while not tts_text_queue.empty():
+            try:
+                tts_text_queue.get_nowait()
+            except queue.Empty:
+                break
+        tts_text_queue.put_nowait(None)
+        raise
 
     assistant_text = "".join(llm_full_text)
 
-    # ── Phase 4: update session, upload full audio ───────────────────────
+    # ── Phase 4: update session, upload streamed audio ───────────────────
     await chat_session_manager.append_message(chat_sess.session_id, "user", user_text)
     await chat_session_manager.append_message(chat_sess.session_id, "assistant", assistant_text)
 
     tts_url = None
-    try:
-        tts_result = await tts_service.synthesize_and_upload(
-            text=assistant_text,
-            voice_type=voice_type,
-            codec="mp3",
-        )
-        if tts_result.get("success"):
-            tts_url = tts_result.get("url")
-    except Exception as e:
-        logger.error(f"TTS upload error: {e}")
+    # Upload the audio collected during streaming (no second synthesis)
+    if tts_collected_chunks and not tts_error_holder:
+        try:
+            from app.services.s3_storage import s3_storage
+            full_audio = b"".join(tts_collected_chunks)
+            upload_result = s3_storage.upload_tts_audio(
+                audio_data=full_audio,
+                codec="mp3",
+                text=assistant_text,
+                subfolder="tts",
+            )
+            if upload_result.get("success"):
+                tts_url = upload_result.get("url")
+        except Exception as e:
+            logger.error(f"TTS upload error: {e}")
 
     await websocket.send_json({
         "type": "chat_done",

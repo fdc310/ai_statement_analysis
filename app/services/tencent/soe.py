@@ -2,19 +2,13 @@
 Tencent Cloud SOE (Smart Oral Evaluation) service using WebSocket SDK.
 Supports fallback: recording mode -> streaming mode -> error.
 """
-import sys
-import os
 import threading
 import time
 import logging
 from typing import Optional
 
 from app.core.thread_pool import ThreadPool
-
-# Add SDK path to sys.path
-SDK_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "core", "util", "tencentcloud-speech-sdk-python")
-if SDK_PATH not in sys.path:
-    sys.path.insert(0, SDK_PATH)
+from app.core.sdk_path import SDK_PATH  # noqa: F401 — ensures SDK is on sys.path
 
 from common.credential import Credential
 from soe.speaking_assessment import SpeakingAssessment, SpeakingAssessmentListener

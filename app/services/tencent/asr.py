@@ -2,18 +2,12 @@
 Tencent Cloud ASR (Automatic Speech Recognition) service using Flash Recognizer SDK.
 """
 import json
-import sys
-import os
 from typing import Optional
 
 import httpx
 
 from app.core.thread_pool import ThreadPool
-
-# Add SDK path to sys.path
-SDK_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "core", "util", "tencentcloud-speech-sdk-python")
-if SDK_PATH not in sys.path:
-    sys.path.insert(0, SDK_PATH)
+from app.core.sdk_path import SDK_PATH  # noqa: F401 — ensures SDK is on sys.path
 
 from common.credential import Credential
 from asr.flash_recognizer import FlashRecognizer, FlashRecognitionRequest
