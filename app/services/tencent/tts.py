@@ -78,6 +78,25 @@ class TTSService:
         # English voices
         "en_female_1": 101050,  # WeJack - 英文女声
         "en_male_1": 101051,    # WeRose - 英文男声
+        # 超自然大模型音色
+        "zhi_xiaohu": 502007,       # 智小虎 - 聊天童声
+        "zhi_xiaowu": 502006,       # 智小悟 - 聊天男声
+        "zhi_xiaojie": 502005,      # 智小解 - 解说男声
+        "zhi_xiaoman": 502004,      # 智小满 - 营销女声
+        "zhi_xiaomin": 502003,      # 智小敏 - 聊天女声
+        "zhi_xiaorou": 502001,      # 智小柔 - 聊天女声
+        "nuanxin_acan": 602004,     # 暖心阿灿 - 聊天男声
+        "zhuanye_zixing": 602005,   # 专业梓欣 - 聊天女声
+        "aixiaoyou": 602003,        # 爱小悠 - 聊天女声
+        # 特色音色
+        "dongshi_shaonian": 603000, # 懂事少年 - 特色男声
+        "xiaoxiang_meimei": 603001, # 潇湘妹妹 - 特色女声
+        "ruanmeng_xinxin": 603002,  # 软萌心心 - 特色男童声
+        "suihe_laoli": 603003,      # 随和老李 - 聊天男声
+        "wenrou_xiaoning": 603004,  # 温柔小柠 - 聊天女声
+        "zhixin_dalin": 603005,     # 知心大林 - 聊天男声
+        "chenwen_qingshu": 603006,  # 沉稳青叔 - 聊天男声
+        "linjia_nvhai": 603007,     # 邻家女孩 - 聊天女声
     }
 
     def __init__(

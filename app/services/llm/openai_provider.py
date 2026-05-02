@@ -78,7 +78,7 @@ class OpenAIProvider(BaseLLMProvider):
                 )
                 content_parts = []
                 async for chunk in response:
-                    if chunk.choices[0].delta.content:
+                    if chunk.choices and chunk.choices[0].delta.content:
                         content_parts.append(chunk.choices[0].delta.content)
                 result = ChatResponse(
                     content="".join(content_parts),
@@ -137,7 +137,7 @@ class OpenAIProvider(BaseLLMProvider):
                 timeout=timeout
             )
             async for chunk in response:
-                if chunk.choices[0].delta.content:
+                if chunk.choices and chunk.choices[0].delta.content:
                     yield chunk.choices[0].delta.content
             logger.info("OpenAI stream request completed")
 

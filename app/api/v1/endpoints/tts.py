@@ -31,7 +31,7 @@ class TTSRequest(BaseModel):
     text: str = Field(..., description="Text to synthesize", max_length=5000)
     voice_type: int = Field(
         default=101001,
-        description="Voice type ID. Common options: 101001(智瑜-女), 101005(智华-男), 101050(英文女), 101051(英文男)"
+        description="Voice type ID. Standard: 101001(智瑜-女), 101005(智华-男). Super-natural: 502001-502007, 602003-602005, 603000-603007"
     )
     codec: str = Field(
         default="mp3",
@@ -220,6 +220,25 @@ async def list_voices(
         {"id": 101007, "name": "智明", "gender": "male", "language": "zh", "description": "新闻男声"},
         {"id": 101050, "name": "WeJack", "gender": "female", "language": "en", "description": "英文女声"},
         {"id": 101051, "name": "WeRose", "gender": "male", "language": "en", "description": "英文男声"},
+        # 超自然大模型音色
+        {"id": 502007, "name": "智小虎", "gender": "neutral", "language": "zh/en", "description": "聊天童声"},
+        {"id": 502006, "name": "智小悟", "gender": "neutral", "language": "zh/en", "description": "聊天男声"},
+        {"id": 502005, "name": "智小解", "gender": "neutral", "language": "zh/en", "description": "解说男声"},
+        {"id": 502004, "name": "智小满", "gender": "neutral", "language": "zh/en", "description": "营销女声"},
+        {"id": 502003, "name": "智小敏", "gender": "neutral", "language": "zh/en", "description": "聊天女声"},
+        {"id": 502001, "name": "智小柔", "gender": "neutral", "language": "zh/en", "description": "聊天女声"},
+        {"id": 602004, "name": "暖心阿灿", "gender": "neutral", "language": "zh/en", "description": "聊天男声"},
+        {"id": 602005, "name": "专业梓欣", "gender": "neutral", "language": "zh/en", "description": "聊天女声"},
+        {"id": 602003, "name": "爱小悠", "gender": "neutral", "language": "zh/en", "description": "聊天女声"},
+        # 特色音色
+        {"id": 603000, "name": "懂事少年", "gender": "neutral", "language": "zh/en", "description": "特色男声"},
+        {"id": 603001, "name": "潇湘妹妹", "gender": "neutral", "language": "zh/en", "description": "特色女声"},
+        {"id": 603002, "name": "软萌心心", "gender": "neutral", "language": "zh/en", "description": "特色男童声"},
+        {"id": 603003, "name": "随和老李", "gender": "neutral", "language": "zh/en", "description": "聊天男声"},
+        {"id": 603004, "name": "温柔小柠", "gender": "neutral", "language": "zh/en", "description": "聊天女声"},
+        {"id": 603005, "name": "知心大林", "gender": "neutral", "language": "zh/en", "description": "聊天男声"},
+        {"id": 603006, "name": "沉稳青叔", "gender": "neutral", "language": "zh/en", "description": "聊天男声"},
+        {"id": 603007, "name": "邻家女孩", "gender": "neutral", "language": "zh/en", "description": "聊天女声"},
     ]
 
     return {"voices": voices}
