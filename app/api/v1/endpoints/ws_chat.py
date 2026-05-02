@@ -228,6 +228,8 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
 
     # ── Phase 3: LLM stream + persistent TTS connection ─────────────────
     # ONE TTS WebSocket connection. LLM feeds text in, audio comes out.
+    # We keep the connection alive by NOT calling complete() until the LLM
+    # is done. Periodic empty process() calls serve as heartbeats.
     # NOTE: tts_text_queue must be queue.Queue (not asyncio.Queue) because
     #       the TTS worker runs in a daemon thread.
     llm = get_llm_service()
@@ -240,12 +242,16 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
         Runs in a daemon thread. Creates ONE TTS WebSocket connection,
         reads text from tts_text_queue, feeds to TTS via process(),
         collects audio from listener, puts into tts_audio_queue.
+        Only calls complete() when LLM is done (None signal received).
         """
         import time as _time
 
-        credential = Credential(settings.tencent_secret_id, settings.tencent_secret_key)
         listener = _ChatTTSListener()
-        synthesizer = FlowingSpeechSynthesizer(int(settings.tencent_appid), credential, listener)
+        synthesizer = FlowingSpeechSynthesizer(
+            int(settings.tencent_appid),
+            Credential(settings.tencent_secret_id, settings.tencent_secret_key),
+            listener,
+        )
         synthesizer.set_voice_type(voice_type)
         synthesizer.set_codec("mp3")
         synthesizer.set_sample_rate(16000)
@@ -260,37 +266,58 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
 
         logger.info("TTS persistent connection ready")
 
+        last_feed_time = _time.time()
+
         # Feed text chunks into the single connection
         while True:
             try:
                 text = tts_text_queue.get(timeout=0.05)
             except queue.Empty:
-                # Queue empty — check if LLM is done
-                if listener._done:
-                    break
-                # LLM still generating, wait and retry
+                # Queue empty — send heartbeat to keep connection alive
+                now = _time.time()
+                if now - last_feed_time > 20:
+                    try:
+                        synthesizer.process("")
+                    except Exception:
+                        pass
+                    last_feed_time = now
                 continue
 
             if text is None:
                 # End signal from LLM — flush and close
                 break
 
-            synthesizer.process(text)
+            # Split text at sentence boundaries for natural pauses
+            parts = _SENTENCE_RE.split(text)
+            if len(parts) > 1:
+                for part in parts:
+                    if part.strip():
+                        synthesizer.process(part)
+            else:
+                synthesizer.process(text)
+            last_feed_time = _time.time()
 
         # Tell TTS server we're done — it will send FINAL frame
-        synthesizer.complete()
+        try:
+            synthesizer.complete()
+        except Exception as e:
+            logger.error(f"TTS complete() failed: {e}")
+
+        # Wait for synthesis to finish
+        synthesizer.wait()
 
         # Drain remaining audio from listener queue
         while True:
             try:
-                chunk = listener._audio_queue.get(timeout=0.1)
+                chunk = listener._audio_queue.get(timeout=0.5)
                 if chunk is None:
                     break
                 tts_audio_queue.put_nowait({"audio": base64.b64encode(chunk).decode("utf-8")})
             except queue.Empty:
-                if listener._done:
-                    break
-                continue
+                break
+
+        if listener._error:
+            logger.error(f"TTS error: {listener._error}")
 
         logger.info("TTS persistent connection closed")
         tts_audio_queue.put_nowait(None)  # sentinel for sender
