@@ -18,8 +18,7 @@ import re
 import base64
 import queue
 import threading
-import uuid
-from typing import Optional, AsyncGenerator
+from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 
@@ -27,46 +26,12 @@ from app.services.streaming.session_manager import StreamingSession
 from app.schemas.streaming_chat import StreamChatConfig
 from app.core.config import settings
 from app.core.security import aes_service
-from app.core.sdk_path import SDK_PATH  # noqa: F401 — ensures SDK is on sys.path
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _SENTENCE_RE = re.compile(r'(?<=[。！？\n])')
 _PAUSE_RE = re.compile(r'(?<=[，、；])')
-
-from common.credential import Credential
-from tts.flowing_speech_synthesizer import FlowingSpeechSynthesizer, FlowingSpeechSynthesisListener
-
-
-class _ChatTTSListener(FlowingSpeechSynthesisListener):
-    """Listener that queues audio chunks and signals completion."""
-
-    def __init__(self):
-        self._audio_queue: queue.Queue = queue.Queue()
-        self._done = False
-        self._error = None
-        self._lock = threading.Lock()
-
-    def on_synthesis_start(self, session_id):
-        pass
-
-    def on_synthesis_end(self):
-        with self._lock:
-            self._done = True
-        self._audio_queue.put(None)  # sentinel
-
-    def on_audio_result(self, audio_bytes):
-        self._audio_queue.put(audio_bytes)
-
-    def on_text_result(self, response):
-        pass
-
-    def on_synthesis_fail(self, response):
-        with self._lock:
-            self._error = f"TTS failed: code={response.get('code')}, msg={response.get('message')}"
-            self._done = True
-        self._audio_queue.put(None)
 
 
 @router.websocket("/ws/chat")
@@ -247,24 +212,22 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
     llm_full_text: list[str] = []
     tts_stop_event = threading.Event()
 
+    from app.services import get_tts_service
+    tts_svc = get_tts_service()
+
     def _tts_persistent_worker():
-        """Daemon thread: ONE TTS WebSocket connection, reads text → produces audio."""
+        """Daemon thread: ONE persistent TTS connection, reads text → produces audio."""
         import time as _time
 
-        listener = _ChatTTSListener()
-        synthesizer = FlowingSpeechSynthesizer(
-            int(settings.tencent_appid),
-            Credential(settings.tencent_secret_id, settings.tencent_secret_key),
-            listener,
+        session = tts_svc.create_stream_session(
+            voice_type=voice_type,
+            codec="mp3",
+            sample_rate=16000,
+            speed=1.0,
+            volume=0.0,
         )
-        synthesizer.set_voice_type(voice_type)
-        synthesizer.set_codec("mp3")
-        synthesizer.set_sample_rate(16000)
-        synthesizer.set_speed(1.0)
-        synthesizer.set_volume(0.0)
-
-        synthesizer.start()
-        if not synthesizer.wait_ready(10000):
+        session.start()
+        if not session.wait_ready(10000):
             logger.error("TTS persistent connection not ready within 10s")
             tts_audio_queue.put_nowait(None)
             return
@@ -280,7 +243,7 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
                 now = _time.time()
                 if now - last_feed_time > 20:
                     try:
-                        synthesizer.process("")
+                        session.process("")
                     except Exception:
                         pass
                     last_feed_time = now
@@ -289,31 +252,25 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
             if text is None:
                 break
 
-            synthesizer.process(text)
+            session.process(text)
             last_feed_time = _time.time()
             _time.sleep(0.05)
 
         try:
-            synthesizer.complete()
+            session.complete()
         except Exception as e:
             logger.error(f"TTS complete() failed: {e}")
 
-        synthesizer.wait()
+        session.wait()
 
-        # Drain remaining audio from listener queue
-        while True:
-            try:
-                chunk = listener._audio_queue.get(timeout=0.5)
-                if chunk is None:
-                    break
-                tts_collected_chunks.append(chunk)  # save raw bytes for upload
-                tts_audio_queue.put_nowait({"audio": base64.b64encode(chunk).decode("utf-8")})
-            except queue.Empty:
-                break
+        # Collect audio chunks from the session
+        for chunk in session.get_audio_chunks():
+            tts_collected_chunks.append(chunk)
+            tts_audio_queue.put_nowait({"audio": base64.b64encode(chunk).decode("utf-8")})
 
-        if listener._error:
-            logger.error(f"TTS error: {listener._error}")
-            tts_error_holder.append(listener._error)
+        if session.error:
+            logger.error(f"TTS error: {session.error}")
+            tts_error_holder.append(session.error)
 
         logger.info("TTS persistent connection closed")
         tts_audio_queue.put_nowait(None)

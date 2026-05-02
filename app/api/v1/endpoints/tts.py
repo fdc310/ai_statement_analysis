@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from app.core.config import settings
 from app.core.security import aes_service
-from app.services.tencent import tts_service
+from app.services import tts_service
 
 router = APIRouter()
 

@@ -48,7 +48,8 @@ from app.schemas.evaluation import (
     ImpromptuReactionRequest,
     ImpromptuReactionResponse
 )
-from app.services.tencent import asr_service, soe_service, tts_service
+from app.services.tencent import asr_service, soe_service
+from app.services import tts_service
 from app.services.tencent.audio import get_audio_duration
 from app.services.chat.session_manager import chat_session_manager
 from app.services import get_llm_service

@@ -34,6 +34,21 @@ class Settings(BaseSettings):
     api_host: str = os.getenv("API_HOST", "0.0.0.0")
     api_port: int = int(os.getenv("API_PORT", "8000"))
 
+    # TTS Provider Config (tencent / volcengine / xiaomi / minimax)
+    tts_provider: str = os.getenv("TTS_PROVIDER", "tencent")
+
+    # Volcengine TTS
+    volcengine_tts_appid: str = os.getenv("VOLCENGINE_TTS_APPID", "")
+    volcengine_tts_access_token: str = os.getenv("VOLCENGINE_TTS_ACCESS_TOKEN", "")
+
+    # Xiaomi TTS
+    xiaomi_tts_appid: str = os.getenv("XIAOMI_TTS_APPID", "")
+    xiaomi_tts_api_key: str = os.getenv("XIAOMI_TTS_API_KEY", "")
+
+    # Minimax TTS
+    minimax_tts_api_key: str = os.getenv("MINIMAX_TTS_API_KEY", "")
+    minimax_tts_group_id: str = os.getenv("MINIMAX_TTS_GROUP_ID", "")
+
     # LLM Provider Config (openai / tencent / anthropic)
     llm_provider: str = os.getenv("LLM_PROVIDER", "openai")
     llm_timeout: int = int(os.getenv("LLM_TIMEOUT", "120"))  # Timeout in seconds for LLM requests

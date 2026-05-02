@@ -6,5 +6,5 @@ from app.services.tencent.tts import TTSService, tts_service
 __all__ = [
     "ASRService", "asr_service",
     "SOEService", "soe_service",
-    "TTSService", "tts_service"
+    "TTSService", "tts_service",
 ]
