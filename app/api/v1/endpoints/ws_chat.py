@@ -269,6 +269,8 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
         last_feed_time = _time.time()
 
         # Feed text chunks into the single connection
+        # NOTE: run_llm_stream already splits at sentence/pause boundaries,
+        # so we do NOT split again here. Just send directly to process().
         while True:
             try:
                 text = tts_text_queue.get(timeout=0.05)
@@ -287,15 +289,11 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
                 # End signal from LLM — flush and close
                 break
 
-            # Split text at sentence boundaries for natural pauses
-            parts = _SENTENCE_RE.split(text)
-            if len(parts) > 1:
-                for part in parts:
-                    if part.strip():
-                        synthesizer.process(part)
-            else:
-                synthesizer.process(text)
+            # Send text directly — no double splitting
+            synthesizer.process(text)
             last_feed_time = _time.time()
+            # Small delay to let TTS server process before next chunk
+            _time.sleep(0.05)
 
         # Tell TTS server we're done — it will send FINAL frame
         try:
@@ -355,13 +353,12 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
 
         except Exception as e:
             logger.error(f"LLM stream error: {e}")
-
-        # Flush remaining text
-        if sentence_buffer.strip():
-            tts_text_queue.put_nowait(sentence_buffer)
-
-        # Signal TTS worker that LLM is done
-        tts_text_queue.put_nowait(None)
+        finally:
+            # Flush remaining text
+            if sentence_buffer.strip():
+                tts_text_queue.put_nowait(sentence_buffer)
+            # Signal TTS worker that LLM is done (always, even on error)
+            tts_text_queue.put_nowait(None)
 
     async def send_tts_chunks():
         """Read from tts_audio_queue and send to client until sentinel."""
@@ -376,13 +373,13 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
 
     # Start all three concurrently:
     # - tts_thread: persistent TTS connection, reads text → produces audio
+    # - tts_sender: reads tts_audio_queue → sends tts_chunk to client (starts NOW)
     # - llm_task: streams LLM → sends llm_delta + feeds tts_text_queue
-    # - tts_sender: reads tts_audio_queue → sends tts_chunk to client
     tts_thread = threading.Thread(target=_tts_persistent_worker, daemon=True)
     tts_thread.start()
 
-    llm_task = asyncio.create_task(run_llm_stream())
     tts_sender = asyncio.create_task(send_tts_chunks())
+    llm_task = asyncio.create_task(run_llm_stream())
 
     # Wait for LLM to finish (this signals TTS thread to complete)
     await llm_task
