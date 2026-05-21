@@ -2,11 +2,12 @@
 Unified LLM service supporting multiple providers via Provider Registry.
 """
 import logging
-from typing import Optional, AsyncGenerator
+from typing import Awaitable, Callable, Optional, AsyncGenerator
 
 from app.core.config import settings
 from app.services.llm.registry import ProviderRegistry
 from app.services.llm.base import ChatResponse
+from app.services.llm.limiter import llm_limiter
 from app.services.agents.prompts.common import extract_json
 from app.services.agents.prompts.evaluation import (
     basic_evaluation_system_prompt,
@@ -45,6 +46,8 @@ from app.services.agents.prompts.text_analysis import (
 
 logger = logging.getLogger(__name__)
 
+StatusCallback = Callable[[dict], Awaitable[None]]
+
 
 class LLMService:
     """Unified LLM service supporting multiple providers."""
@@ -65,15 +68,21 @@ class LLMService:
         temperature: float = 0.7,
         top_p: float = 0.9,
         stream: bool = False,
-        timeout: Optional[float] = None
+        timeout: Optional[float] = None,
+        status_callback: Optional[StatusCallback] = None
     ) -> dict:
         """Generate chat completion."""
-        result = await self._provider.chat(
-            messages=messages,
-            temperature=temperature,
-            top_p=top_p,
-            stream=stream,
-            timeout=timeout
+        result = await llm_limiter.run(
+            lambda: self._provider.chat(
+                messages=messages,
+                temperature=temperature,
+                top_p=top_p,
+                stream=stream,
+                timeout=timeout
+            ),
+            provider=self.provider_name,
+            operation_name="chat_stream_collect" if stream else "chat",
+            status_callback=status_callback,
         )
         return result.model_dump()
 
@@ -82,14 +91,24 @@ class LLMService:
         messages: list[dict],
         temperature: float = 0.7,
         top_p: float = 0.9,
-        timeout: Optional[float] = None
+        timeout: Optional[float] = None,
+        status_callback: Optional[StatusCallback] = None
     ) -> AsyncGenerator[str, None]:
         """Generate chat completion with streaming."""
-        async for chunk in self._provider.chat_stream(
-            messages=messages,
-            temperature=temperature,
-            top_p=top_p,
-            timeout=timeout
+        async def _operation():
+            async for chunk in self._provider.chat_stream(
+                messages=messages,
+                temperature=temperature,
+                top_p=top_p,
+                timeout=timeout
+            ):
+                yield chunk
+
+        async for chunk in llm_limiter.stream(
+            _operation,
+            provider=self.provider_name,
+            operation_name="chat_stream",
+            status_callback=status_callback,
         ):
             yield chunk
 
@@ -101,17 +120,23 @@ class LLMService:
         temperature: float = 0.7,
         top_p: float = 0.9,
         model: Optional[str] = None,
-        timeout: Optional[float] = None
+        timeout: Optional[float] = None,
+        status_callback: Optional[StatusCallback] = None
     ) -> dict:
         """Chat with multimodal model using audio input directly."""
-        result = await self._provider.chat_multimodal(
-            audio_url=audio_url,
-            messages=messages,
-            system_prompt=system_prompt,
-            temperature=temperature,
-            top_p=top_p,
-            model=model,
-            timeout=timeout
+        result = await llm_limiter.run(
+            lambda: self._provider.chat_multimodal(
+                audio_url=audio_url,
+                messages=messages,
+                system_prompt=system_prompt,
+                temperature=temperature,
+                top_p=top_p,
+                model=model,
+                timeout=timeout
+            ),
+            provider=self.provider_name,
+            operation_name="chat_multimodal",
+            status_callback=status_callback,
         )
         return result.model_dump()
 

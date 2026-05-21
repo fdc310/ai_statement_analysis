@@ -218,6 +218,7 @@ async def _evaluate_blood_bar(
     user_text: str,
     assistant_text: str,
     current_hp: int,
+    status_callback=None,
 ) -> Optional[dict]:
     """Use LLM to evaluate user's answer for blood bar mechanism."""
     criteria = _BLOOD_BAR_SCENE_CRITERIA.get(
@@ -237,7 +238,11 @@ async def _evaluate_blood_bar(
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
-        result = await llm_service.chat(messages, temperature=0.3)
+        result = await llm_service.chat(
+            messages,
+            temperature=0.3,
+            status_callback=status_callback,
+        )
         content = result.get("content", "").strip()
 
         # Extract JSON from response (handle possible markdown code blocks)
@@ -265,13 +270,25 @@ async def _evaluate_blood_bar(
 
 
 async def _handle_end(websocket: WebSocket, session: StreamingSession, config: StreamChatConfig):
+    ws_send_lock = asyncio.Lock()
+
+    async def send_ws_json(payload: dict):
+        async with ws_send_lock:
+            await websocket.send_json(payload)
+
+    async def send_ai_status(data: dict):
+        await send_ws_json({
+            "type": "ai_status",
+            "data": data,
+        })
+
     """Handle 'end' message: ASR → parallel LLM + persistent TTS → chat_done."""
 
     # ── Phase 1: finish ASR/SOE ──────────────────────────────────────────
     result = await session.finish()
 
     if not result.speech_text or not result.speech_text.strip():
-        await websocket.send_json({
+        await send_ws_json({
             "type": "chat_done",
             "data": {
                 "session_id": result.session_id,
@@ -315,6 +332,10 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
 
     # ── Phase 3: LLM stream + optional TTS ──────────────────────────────
     llm = get_llm_service()
+    await send_ai_status({
+        "stage": "preparing",
+        "message": "AI chat response is starting",
+    })
     tts_text_queue: queue.Queue = queue.Queue()
     tts_audio_queue: asyncio.Queue = asyncio.Queue()
     tts_collected_chunks: list[bytes] = []
@@ -396,11 +417,15 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
         """Stream LLM response, send llm_delta to client, feed TTS on sentence boundaries."""
         sentence_buffer = ""
         try:
-            async for delta in llm.chat_stream(llm_messages, temperature=0.7):
+            async for delta in llm.chat_stream(
+                llm_messages,
+                temperature=0.7,
+                status_callback=send_ai_status,
+            ):
                 llm_full_text.append(delta)
                 sentence_buffer += delta
 
-                await websocket.send_json({
+                await send_ws_json({
                     "type": "llm_delta",
                     "data": {"text": delta},
                 })
@@ -436,7 +461,7 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
             if item is None:
                 break
             try:
-                await websocket.send_json({"type": "tts_chunk", "data": item})
+                await send_ws_json({"type": "tts_chunk", "data": item})
             except Exception as e:
                 logger.error(f"send_tts_chunks error: {e}")
 
@@ -471,7 +496,8 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
     blood_bar_data = None
     if config.enable_blood_bar and chat_sess.enable_blood_bar:
         blood_bar_data = await _evaluate_blood_bar(
-            llm, scene, user_text, assistant_text, chat_sess.hp
+            llm, scene, user_text, assistant_text, chat_sess.hp,
+            status_callback=send_ai_status,
         )
         if blood_bar_data:
             await chat_session_manager.update_hp(
@@ -510,5 +536,5 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
     if blood_bar_data:
         done_data["blood_bar"] = blood_bar_data
 
-    await websocket.send_json({"type": "chat_done", "data": done_data})
+    await send_ws_json({"type": "chat_done", "data": done_data})
     logger.info(f"WS chat completed: {session.session_id}")

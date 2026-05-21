@@ -77,7 +77,11 @@ class ReportAgent(BaseAgent):
             {"role": "user", "content": user_prompt}
         ]
 
-        result = await llm.chat(messages, temperature=0.3)
+        result = await llm.chat(
+            messages,
+            temperature=0.3,
+            status_callback=context.request.get("_llm_status_callback"),
+        )
         content = result.get("content", "")
 
         # Record token usage

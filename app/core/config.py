@@ -37,6 +37,13 @@ class Settings(BaseSettings):
     # LLM Provider Config (openai / tencent / anthropic)
     llm_provider: str = os.getenv("LLM_PROVIDER", "openai")
     llm_timeout: int = int(os.getenv("LLM_TIMEOUT", "120"))  # Timeout in seconds for LLM requests
+    llm_max_concurrent: int = int(os.getenv("LLM_MAX_CONCURRENT", "2"))
+    llm_queue_max_size: int = int(os.getenv("LLM_QUEUE_MAX_SIZE", "100"))
+    llm_queue_timeout: float = float(os.getenv("LLM_QUEUE_TIMEOUT", "60"))
+    llm_min_interval_ms: int = int(os.getenv("LLM_MIN_INTERVAL_MS", "500"))
+    llm_max_retries: int = int(os.getenv("LLM_MAX_RETRIES", "3"))
+    llm_retry_base_delay: float = float(os.getenv("LLM_RETRY_BASE_DELAY", "1.0"))
+    llm_retry_max_delay: float = float(os.getenv("LLM_RETRY_MAX_DELAY", "8.0"))
 
     # Tencent Hunyuan Model Config
     tencent_model: str = os.getenv("TENCENT_MODEL", "hunyuan-turbo")
