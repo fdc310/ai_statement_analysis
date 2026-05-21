@@ -62,6 +62,11 @@ class LLMService:
         """Get the provider name."""
         return self._provider.name
 
+    @property
+    def model_name(self) -> str:
+        """Get the configured provider model name when available."""
+        return getattr(self._provider, "_model", "unknown")
+
     async def chat(
         self,
         messages: list[dict],

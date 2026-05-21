@@ -170,7 +170,11 @@ class LLMRequestLimiter:
             async with self._queue_lock:
                 self._waiting_count = max(0, self._waiting_count - 1)
 
-        await self._wait_min_interval()
+        try:
+            await self._wait_min_interval()
+        except Exception:
+            self._semaphore.release()
+            raise
         return _LLMSlot(self._semaphore)
 
     async def _wait_min_interval(self) -> None:
@@ -192,6 +196,9 @@ class LLMRequestLimiter:
         return delay + random.uniform(0, min(0.5, delay * 0.2))
 
     def _is_retryable(self, exc: Exception) -> bool:
+        if isinstance(exc, (LLMQueueFullError, LLMQueueTimeoutError)):
+            return False
+
         text = f"{type(exc).__name__}: {exc}".lower()
         retry_markers = (
             "429",

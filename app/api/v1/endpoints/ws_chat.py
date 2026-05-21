@@ -18,8 +18,7 @@ import re
 import base64
 import queue
 import threading
-import uuid
-from typing import Optional, AsyncGenerator
+from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 
@@ -270,6 +269,7 @@ async def _evaluate_blood_bar(
 
 
 async def _handle_end(websocket: WebSocket, session: StreamingSession, config: StreamChatConfig):
+    """Handle 'end' message: ASR -> parallel LLM + persistent TTS -> chat_done."""
     ws_send_lock = asyncio.Lock()
 
     async def send_ws_json(payload: dict):
@@ -342,6 +342,10 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
     tts_error_holder: list[str] = []
     llm_full_text: list[str] = []
     tts_stop_event = threading.Event()
+    loop = asyncio.get_running_loop()
+
+    def put_tts_audio(item):
+        loop.call_soon_threadsafe(tts_audio_queue.put_nowait, item)
 
     def _tts_persistent_worker():
         """Daemon thread: ONE TTS WebSocket connection, reads text → produces audio."""
@@ -362,7 +366,7 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
         synthesizer.start()
         if not synthesizer.wait_ready(10000):
             logger.error("TTS persistent connection not ready within 10s")
-            tts_audio_queue.put_nowait(None)
+            put_tts_audio(None)
             return
 
         logger.info("TTS persistent connection ready")
@@ -402,7 +406,7 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
                 if chunk is None:
                     break
                 tts_collected_chunks.append(chunk)
-                tts_audio_queue.put_nowait({"audio": base64.b64encode(chunk).decode("utf-8")})
+                put_tts_audio({"audio": base64.b64encode(chunk).decode("utf-8")})
             except queue.Empty:
                 break
 
@@ -411,7 +415,7 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
             tts_error_holder.append(listener._error)
 
         logger.info("TTS persistent connection closed")
-        tts_audio_queue.put_nowait(None)
+        put_tts_audio(None)
 
     async def run_llm_stream():
         """Stream LLM response, send llm_delta to client, feed TTS on sentence boundaries."""

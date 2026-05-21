@@ -69,7 +69,7 @@ class DimensionAgent(BaseAgent):
             try:
                 await token_tracker.record_usage(
                     provider=getattr(llm, 'provider_name', 'unknown'),
-                    model=getattr(llm, '_model', 'unknown'),
+                    model=llm.model_name,
                     prompt_tokens=usage.get("prompt_tokens", 0),
                     completion_tokens=usage.get("completion_tokens", 0),
                     agent_name=self._dim_name,
