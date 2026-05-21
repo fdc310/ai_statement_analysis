@@ -44,6 +44,10 @@ class ChatSession(BaseModel):
     messages: list[dict] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=datetime.now)
     last_active: datetime = Field(default_factory=datetime.now)
+    # Blood bar state
+    hp: int = 100
+    enable_blood_bar: bool = False
+    blood_history: list[dict] = Field(default_factory=list)
 
 
 class ChatSessionManager:
@@ -72,6 +76,8 @@ class ChatSessionManager:
         system_prompt: Optional[str] = None,
         mode: str = "traditional",
         voice_type: int = 101001,
+        enable_blood_bar: bool = False,
+        initial_hp: int = 100,
     ) -> ChatSession:
         """Create a new chat session."""
         async with self._lock:
@@ -81,6 +87,8 @@ class ChatSessionManager:
                 system_prompt=resolved_prompt,
                 mode=mode,
                 voice_type=voice_type,
+                enable_blood_bar=enable_blood_bar,
+                hp=initial_hp,
             )
             self._sessions[session.session_id] = session
             logger.info(f"Created chat session {session.session_id}, scene={scene}, mode={mode}")
@@ -110,6 +118,8 @@ class ChatSessionManager:
         system_prompt: Optional[str] = None,
         mode: str = "traditional",
         voice_type: int = 101001,
+        enable_blood_bar: bool = False,
+        initial_hp: int = 100,
     ) -> ChatSession:
         """Get existing session or create new one."""
         if session_id:
@@ -117,7 +127,10 @@ class ChatSessionManager:
             if session:
                 return session
 
-        return await self.create_session(scene, system_prompt, mode, voice_type)
+        return await self.create_session(
+            scene, system_prompt, mode, voice_type,
+            enable_blood_bar, initial_hp,
+        )
 
     async def update_scene(
         self,
@@ -141,6 +154,29 @@ class ChatSessionManager:
             session.last_active = datetime.now()
             logger.info(f"Session {session_id} scene updated to {scene}")
             return session
+
+    async def update_hp(
+        self,
+        session_id: str,
+        delta: int,
+        reason: str = "",
+    ) -> Optional[dict]:
+        """Update session HP and record blood bar change. Returns blood bar state dict."""
+        async with self._lock:
+            session = self._sessions.get(session_id)
+            if not session:
+                return None
+
+            session.hp = max(0, session.hp + delta)
+            record = {
+                "delta": delta,
+                "hp": session.hp,
+                "reason": reason,
+                "game_over": session.hp <= 0,
+            }
+            session.blood_history.append(record)
+            session.last_active = datetime.now()
+            return record
 
     async def append_message(self, session_id: str, role: str, content: str) -> None:
         """Append a message to session history, trimming oldest if over limit."""

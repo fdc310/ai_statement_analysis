@@ -17,6 +17,20 @@ if SDK_PATH not in sys.path:
 from common.credential import Credential
 from asr.speech_recognizer import SpeechRecognizer, SpeechRecognitionListener
 
+# Monkey-patch: websocket-client updated on_close signature to (ws, close_status_code, close_msg),
+# but the SDK's on_close only accepts (ws). Patch after start() to wrap the callback.
+_original_sr_start = SpeechRecognizer.start
+
+def _patched_start(self):
+    _original_sr_start(self)
+    if hasattr(self, 'ws') and self.ws and hasattr(self.ws, 'on_close') and self.ws.on_close:
+        _original_on_close = self.ws.on_close
+        def _safe_on_close(ws, close_status_code=None, close_msg=None):
+            _original_on_close(ws)
+        self.ws.on_close = _safe_on_close
+
+SpeechRecognizer.start = _patched_start
+
 from app.core.config import settings
 from app.core.thread_pool import ThreadPool
 

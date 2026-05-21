@@ -21,3 +21,6 @@ class StreamChatConfig(BaseModel):
     enable_timestamps: bool = False
     eval_type: str = ""  # optional: impromptu_reaction etc.
     scenario: str = ""  # for eval_type
+    enable_tts: bool = True  # 是否生成TTS语音
+    enable_blood_bar: bool = False  # 是否启用血条机制
+    initial_hp: int = 100  # 初始血量
