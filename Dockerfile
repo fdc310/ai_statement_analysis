@@ -20,9 +20,15 @@ RUN pip install --no-cache-dir -r requirements.txt \
 # Copy application code
 COPY . .
 
-# Clone Tencent Cloud Speech SDK (git submodule)
-RUN git clone https://github.com/TencentCloud/tencentcloud-speech-sdk-python.git \
-    app/core/util/tencentcloud-speech-sdk-python
+# Ensure Tencent Cloud Speech SDK exists.
+# COPY may already include the vendored SDK; clone only when the directory is missing or empty.
+RUN if [ -d app/core/util/tencentcloud-speech-sdk-python ] && [ "$(ls -A app/core/util/tencentcloud-speech-sdk-python)" ]; then \
+        echo "Tencent Cloud Speech SDK already exists, skip clone"; \
+    else \
+        rm -rf app/core/util/tencentcloud-speech-sdk-python && \
+        git clone --depth 1 https://github.com/TencentCloud/tencentcloud-speech-sdk-python.git \
+            app/core/util/tencentcloud-speech-sdk-python; \
+    fi
 
 # Create uploads directory
 RUN mkdir -p uploads
