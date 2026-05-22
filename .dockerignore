@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+
+.git
+**/.git
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+uploads
+logs
