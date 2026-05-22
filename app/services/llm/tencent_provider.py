@@ -123,6 +123,8 @@ class TencentProvider(BaseLLMProvider, TencentCloudClient):
                 "TopP": top_p,
                 "Stream": stream
             }
+            if settings.llm_max_tokens > 0:
+                params["MaxTokens"] = settings.llm_max_tokens
             req.from_json_string(json.dumps(params))
 
             async with client:
@@ -182,6 +184,8 @@ class TencentProvider(BaseLLMProvider, TencentCloudClient):
                 "TopP": top_p,
                 "Stream": True
             }
+            if settings.llm_max_tokens > 0:
+                params["MaxTokens"] = settings.llm_max_tokens
             req.from_json_string(json.dumps(params))
 
             async with client:
@@ -262,6 +266,8 @@ class TencentProvider(BaseLLMProvider, TencentCloudClient):
                 "TopP": top_p,
                 "Stream": False
             }
+            if settings.llm_max_tokens > 0:
+                params["MaxTokens"] = settings.llm_max_tokens
             req.from_json_string(json.dumps(params))
 
             async with client:

@@ -14,6 +14,7 @@ from app.services.streaming.asr_stream import StreamingASR
 from app.services.streaming.soe_stream import StreamingSOE
 from app.services.streaming.audio_buffer import AudioBuffer
 from app.schemas.streaming import StreamConfig
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +119,12 @@ class StreamingSession:
         """
         if not self._started:
             raise RuntimeError("Session not started")
+
+        max_bytes = max(1, settings.stream_max_session_duration) * BYTES_PER_SEC
+        if self._buffer.size + len(pcm_chunk) > max_bytes:
+            raise ValueError(
+                f"Streaming audio exceeds max duration: {settings.stream_max_session_duration}s"
+            )
 
         # Buffer the audio
         await self._buffer.append(pcm_chunk)

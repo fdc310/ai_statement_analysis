@@ -13,6 +13,12 @@ from app.services.llm.base import BaseLLMProvider, ChatResponse
 logger = logging.getLogger(__name__)
 
 
+def _completion_limit_kwargs() -> dict:
+    if settings.llm_max_tokens <= 0:
+        return {}
+    return {"max_tokens": settings.llm_max_tokens}
+
+
 class OpenAIProvider(BaseLLMProvider):
     """OpenAI-compatible LLM provider."""
 
@@ -74,7 +80,8 @@ class OpenAIProvider(BaseLLMProvider):
                     temperature=temperature,
                     top_p=top_p,
                     stream=True,
-                    timeout=timeout
+                    timeout=timeout,
+                    **_completion_limit_kwargs()
                 )
                 content_parts = []
                 async for chunk in response:
@@ -95,7 +102,8 @@ class OpenAIProvider(BaseLLMProvider):
                     temperature=temperature,
                     top_p=top_p,
                     stream=False,
-                    timeout=timeout
+                    timeout=timeout,
+                    **_completion_limit_kwargs()
                 )
                 result = ChatResponse(
                     content=response.choices[0].message.content,
@@ -134,7 +142,8 @@ class OpenAIProvider(BaseLLMProvider):
                 temperature=temperature,
                 top_p=top_p,
                 stream=True,
-                timeout=timeout
+                timeout=timeout,
+                **_completion_limit_kwargs()
             )
             async for chunk in response:
                 if chunk.choices and chunk.choices[0].delta.content:
@@ -191,7 +200,8 @@ class OpenAIProvider(BaseLLMProvider):
                 temperature=temperature,
                 top_p=top_p,
                 stream=False,
-                timeout=timeout
+                timeout=timeout,
+                **_completion_limit_kwargs()
             )
             result = ChatResponse(
                 content=response.choices[0].message.content,

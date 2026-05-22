@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 class StreamChatConfig(BaseModel):
     """Streaming chat session configuration."""
+    session_id: Optional[str] = None
     language: str = "zh"
     scene: str = ""  # interview / daily / customer_service
     system_prompt: str = ""

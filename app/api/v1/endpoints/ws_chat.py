@@ -168,7 +168,15 @@ async def websocket_streaming_chat(
 
                 elif "bytes" in message:
                     if session:
-                        await session.feed_audio(message["bytes"])
+                        try:
+                            await session.feed_audio(message["bytes"])
+                        except ValueError as e:
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": str(e),
+                            })
+                            await websocket.close(code=4009, reason="Audio duration limit exceeded")
+                            return
                     else:
                         await websocket.send_json({
                             "type": "error",
@@ -315,7 +323,7 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
         system_prompt = VOICE_CHAT_SCENE_PROMPTS.get(scene, DEFAULT_VOICE_CHAT_PROMPT)
 
     chat_sess = await chat_session_manager.get_or_create_session(
-        session_id=None,
+        session_id=config.session_id,
         scene=scene or None,
         system_prompt=system_prompt or None,
         enable_blood_bar=config.enable_blood_bar,

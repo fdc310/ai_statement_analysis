@@ -1,8 +1,12 @@
 """
 Tencent Cloud ASR (Automatic Speech Recognition) service using Flash Recognizer SDK.
 """
+import asyncio
+import ipaddress
 import json
+import socket
 from typing import Optional
+from urllib.parse import urlparse
 
 import httpx
 
@@ -31,10 +35,61 @@ class ASRService:
 
     async def download_audio(self, url: str) -> bytes:
         """Download audio file from URL asynchronously."""
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            return response.content
+        await self._validate_download_url(url)
+        max_bytes = max(1, settings.audio_download_max_bytes)
+
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=False) as client:
+            async with client.stream("GET", url) as response:
+                response.raise_for_status()
+
+                content_length = response.headers.get("content-length")
+                if content_length:
+                    try:
+                        declared_size = int(content_length)
+                    except ValueError:
+                        declared_size = None
+                    if declared_size and declared_size > max_bytes:
+                        raise ValueError(f"Audio file is too large: {content_length} bytes")
+
+                chunks = []
+                total = 0
+                async for chunk in response.aiter_bytes():
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise ValueError(f"Audio file exceeds limit: {max_bytes} bytes")
+                    chunks.append(chunk)
+
+        return b"".join(chunks)
+
+    async def _validate_download_url(self, url: str) -> None:
+        """Validate remote audio URL to reduce SSRF risk."""
+        parsed = urlparse(str(url))
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError("audio_url must use http or https")
+        if not parsed.hostname:
+            raise ValueError("audio_url host is required")
+
+        if settings.audio_download_allow_private:
+            return
+
+        host = parsed.hostname
+
+        def _resolve_host() -> list[str]:
+            infos = socket.getaddrinfo(host, parsed.port or 443, type=socket.SOCK_STREAM)
+            return list({info[4][0] for info in infos})
+
+        addresses = await asyncio.to_thread(_resolve_host)
+        for address in addresses:
+            ip = ipaddress.ip_address(address)
+            if (
+                ip.is_private
+                or ip.is_loopback
+                or ip.is_link_local
+                or ip.is_multicast
+                or ip.is_reserved
+                or ip.is_unspecified
+            ):
+                raise ValueError(f"audio_url resolves to a blocked address: {address}")
 
     async def convert_audio(self, audio_data: bytes) -> bytes:
         """

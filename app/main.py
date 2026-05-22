@@ -7,6 +7,7 @@ A FastAPI application that provides speech evaluation services:
 - AI-powered evaluation report generation (Hunyuan)
 """
 import logging
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -23,9 +24,16 @@ async def lifespan(app: FastAPI):
     """Application lifespan: startup and shutdown events."""
     # Startup
     logger.info("Application starting up...")
+    chat_cleanup_task = asyncio.create_task(_cleanup_chat_sessions_periodically())
+    app.state.chat_cleanup_task = chat_cleanup_task
     yield
     # Shutdown
     logger.info("Application shutting down...")
+    chat_cleanup_task.cancel()
+    try:
+        await chat_cleanup_task
+    except asyncio.CancelledError:
+        pass
     # Clean up singletons
     try:
         from app.core.thread_pool import ThreadPool
@@ -42,6 +50,21 @@ async def lifespan(app: FastAPI):
         await chat_session_manager.cleanup_expired()
     except Exception as e:
         logger.warning(f"ChatSessionManager cleanup error: {e}")
+
+
+async def _cleanup_chat_sessions_periodically():
+    """Periodically remove expired voice-chat sessions."""
+    from app.services.chat.session_manager import chat_session_manager
+
+    interval = max(60, min(settings.chat_session_ttl, 300))
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            await chat_session_manager.cleanup_expired()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"Periodic ChatSessionManager cleanup error: {e}")
 
 app = FastAPI(
     title=settings.app_name,

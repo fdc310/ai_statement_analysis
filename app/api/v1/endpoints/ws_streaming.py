@@ -257,7 +257,15 @@ async def websocket_streaming_eval(
 
                 elif "bytes" in message:
                     if session:
-                        await session.feed_audio(message["bytes"])
+                        try:
+                            await session.feed_audio(message["bytes"])
+                        except ValueError as e:
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": str(e),
+                            })
+                            await websocket.close(code=4009, reason="Audio duration limit exceeded")
+                            return
                     else:
                         await websocket.send_json({
                             "type": "error",

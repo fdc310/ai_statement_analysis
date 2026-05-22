@@ -1,9 +1,10 @@
 """
 API v1 router - aggregates all endpoint routers.
 """
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from app.api.v1.endpoints import evaluation, auth, soe, tts, tasks, monitoring, agents, ws_streaming, ws_chat
+from app.api.deps import verify_signature_header
 
 api_router = APIRouter()
 
@@ -31,17 +32,20 @@ api_router.include_router(
 api_router.include_router(
     tasks.router,
     prefix="/tasks",
-    tags=["Tasks - Async Task Management"]
+    tags=["Tasks - Async Task Management"],
+    dependencies=[Depends(verify_signature_header)]
 )
 api_router.include_router(
     monitoring.router,
     prefix="/monitoring",
-    tags=["Monitoring - Usage Dashboard"]
+    tags=["Monitoring - Usage Dashboard"],
+    dependencies=[Depends(verify_signature_header)]
 )
 api_router.include_router(
     agents.router,
     prefix="/agents",
-    tags=["Agents - Standalone Agent Endpoints"]
+    tags=["Agents - Standalone Agent Endpoints"],
+    dependencies=[Depends(verify_signature_header)]
 )
 api_router.include_router(
     ws_streaming.router,

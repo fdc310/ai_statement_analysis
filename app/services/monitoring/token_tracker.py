@@ -54,9 +54,9 @@ class TokenTracker:
         from app.core.config import settings
 
         # Check env-based pricing first
-        if provider == "hunyuan":
-            input_price = getattr(settings, 'hunyuan_input_price', 0.5)
-            output_price = getattr(settings, 'hunyuan_output_price', 1.0)
+        if provider in ("hunyuan", "tencent"):
+            input_price = getattr(settings, 'tencent_input_price', 0.5)
+            output_price = getattr(settings, 'tencent_output_price', 1.0)
         elif provider == "openai":
             input_price = getattr(settings, 'openai_input_price', 2.5)
             output_price = getattr(settings, 'openai_output_price', 10.0)

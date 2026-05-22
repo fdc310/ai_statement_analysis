@@ -12,6 +12,7 @@ import asyncio
 import os
 import string
 import base64
+from pathlib import Path
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Header, BackgroundTasks
 from typing import Optional
 
@@ -67,6 +68,40 @@ def verify_signature(signature: Optional[str]) -> None:
     )
     if not success:
         raise HTTPException(status_code=401, detail=message)
+
+
+async def read_allowed_audio_path(audio_path: str) -> bytes:
+    """Read server-local audio only from the configured AUDIO_LOCAL_ROOT."""
+    root_value = settings.audio_local_root.strip()
+    if not root_value:
+        raise HTTPException(
+            status_code=400,
+            detail="audio_path is disabled. Configure AUDIO_LOCAL_ROOT to enable local audio reads."
+        )
+
+    root = Path(root_value)
+    if not root.is_absolute():
+        root = Path.cwd() / root
+    root = root.resolve()
+
+    target = Path(audio_path)
+    if not target.is_absolute():
+        target = root / target
+    target = target.resolve()
+
+    try:
+        target.relative_to(root)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="audio_path is outside AUDIO_LOCAL_ROOT")
+
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail=f"Audio file not found: {audio_path}")
+
+    def _read_file(path: Path) -> bytes:
+        with path.open("rb") as f:
+            return f.read()
+
+    return await asyncio.to_thread(_read_file, target)
 
 
 async def send_callback(callback_url: str, data: EvaluationCallbackData) -> None:
@@ -246,17 +281,7 @@ async def evaluate_speech(
         if request.audio_url:
             audio_data = await asr_service.download_audio(request.audio_url)
         else:
-            if not os.path.exists(request.audio_path):
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Audio file not found: {request.audio_path}"
-                )
-
-            def _read_file(path: str) -> bytes:
-                with open(path, "rb") as f:
-                    return f.read()
-
-            audio_data = await asyncio.to_thread(_read_file, request.audio_path)
+            audio_data = await read_allowed_audio_path(request.audio_path)
 
         # Determine engine type based on language
         engine_type = "16k_zh" if request.language == "zh" else "16k_en"

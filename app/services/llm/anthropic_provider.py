@@ -12,6 +12,10 @@ from app.services.llm.base import BaseLLMProvider, ChatResponse
 logger = logging.getLogger(__name__)
 
 
+def _max_tokens() -> int:
+    return settings.llm_max_tokens if settings.llm_max_tokens > 0 else 4096
+
+
 class AnthropicProvider(BaseLLMProvider):
     """Anthropic Claude LLM provider."""
 
@@ -77,7 +81,7 @@ class AnthropicProvider(BaseLLMProvider):
                 content_parts = []
                 async with self._client.messages.stream(
                     model=self._model,
-                    max_tokens=4096,
+                    max_tokens=_max_tokens(),
                     temperature=temperature,
                     top_p=top_p,
                     system=system_prompt or "",
@@ -96,7 +100,7 @@ class AnthropicProvider(BaseLLMProvider):
                 logger.info(f"Waiting for Anthropic response (timeout={timeout}s)...")
                 response = await self._client.messages.create(
                     model=self._model,
-                    max_tokens=4096,
+                    max_tokens=_max_tokens(),
                     temperature=temperature,
                     top_p=top_p,
                     system=system_prompt or "",
@@ -135,7 +139,7 @@ class AnthropicProvider(BaseLLMProvider):
         try:
             async with self._client.messages.stream(
                 model=self._model,
-                max_tokens=4096,
+                max_tokens=_max_tokens(),
                 temperature=temperature,
                 top_p=top_p,
                 system=system_prompt or "",
@@ -206,7 +210,7 @@ class AnthropicProvider(BaseLLMProvider):
             logger.info(f"Waiting for Anthropic multimodal response (timeout={timeout}s)...")
             response = await self._client.messages.create(
                 model=use_model,
-                max_tokens=4096,
+                max_tokens=_max_tokens(),
                 temperature=temperature,
                 top_p=top_p,
                 system=system_prompt,

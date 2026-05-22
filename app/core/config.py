@@ -29,6 +29,9 @@ class Settings(BaseSettings):
 
     # Request expiration (seconds) - encrypted requests older than this are rejected
     request_expire_seconds: int = int(os.getenv("REQUEST_EXPIRE_SECONDS", "300"))
+    audio_download_max_bytes: int = int(os.getenv("AUDIO_DOWNLOAD_MAX_BYTES", str(50 * 1024 * 1024)))
+    audio_download_allow_private: bool = os.getenv("AUDIO_DOWNLOAD_ALLOW_PRIVATE", "false").lower() == "true"
+    audio_local_root: str = os.getenv("AUDIO_LOCAL_ROOT", "")
 
     # API Server Config
     api_host: str = os.getenv("API_HOST", "0.0.0.0")
@@ -37,7 +40,12 @@ class Settings(BaseSettings):
     # LLM Provider Config (openai / tencent / anthropic)
     llm_provider: str = os.getenv("LLM_PROVIDER", "openai")
     llm_timeout: int = int(os.getenv("LLM_TIMEOUT", "120"))  # Timeout in seconds for LLM requests
-    llm_max_concurrent: int = int(os.getenv("LLM_MAX_CONCURRENT", "2"))
+    # Maximum completion tokens for one LLM response. 0 means provider default.
+    llm_max_tokens: int = int(os.getenv("LLM_MAX_TOKENS", "4000"))
+    # LLM_MAX_CONCURRENT is a legacy global override. 0 means use provider defaults.
+    llm_max_concurrent: int = int(os.getenv("LLM_MAX_CONCURRENT", "0"))
+    llm_tencent_max_concurrent: int = int(os.getenv("LLM_TENCENT_MAX_CONCURRENT", "5"))
+    llm_default_max_concurrent: int = int(os.getenv("LLM_DEFAULT_MAX_CONCURRENT", "50"))
     llm_queue_max_size: int = int(os.getenv("LLM_QUEUE_MAX_SIZE", "100"))
     llm_queue_timeout: float = float(os.getenv("LLM_QUEUE_TIMEOUT", "60"))
     llm_min_interval_ms: int = int(os.getenv("LLM_MIN_INTERVAL_MS", "500"))
@@ -86,7 +94,7 @@ class Settings(BaseSettings):
     monitoring_retention_days: int = int(os.getenv("MONITORING_RETENTION_DAYS", "30"))
 
     # Streaming
-    stream_max_session_duration: int = int(os.getenv("STREAM_MAX_SESSION_DURATION", "300"))
+    stream_max_session_duration: int = int(os.getenv("STREAM_MAX_SESSION_DURATION", "600"))
     stream_audio_buffer_size: int = int(os.getenv("STREAM_AUDIO_BUFFER_SIZE", "1048576"))
 
     # Chat Session

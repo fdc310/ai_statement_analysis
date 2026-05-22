@@ -532,3 +532,185 @@ Level 0 (流式阶段)          Level 1 (并行)                    Level 2
 - 服务端内部以 6400 字节（200ms）为单位分片
 - SOE 发送有 200ms 最小间隔限流
 - 录音结束后音频上传至 S3，返回 `audio_url`
+
+---
+
+## 当前版本补充说明
+
+本节记录当前实现中新增或需要前端特别处理的 WebSocket 行为。
+
+### 端点
+
+| 端点 | 用途 |
+|------|------|
+| `ws[s]://<host>/api/v1/streaming/ws/stream?token=<signature>` | 实时录音评测：ASR/SOE + 可选 AI 多维评测 |
+| `ws[s]://<host>/api/v1/streaming/ws/chat?token=<signature>` | 实时情景对话：ASR + LLM 流式回复 + 可选 TTS |
+
+`token` 使用与 HTTP 接口相同的 AES 签名，放在 query string 中。缺失或过期会关闭连接。
+
+### AI 排队状态 `ai_status`
+
+当录音结束后进入 AI 阶段，服务端可能会发送 `ai_status`。前端建议展示为“排队中 / 分析中 / 重试中”，避免用户误以为卡住。
+
+```json
+{
+  "type": "ai_status",
+  "data": {
+    "stage": "queued",
+    "provider": "openai",
+    "operation": "chat",
+    "attempt": 1,
+    "queue_position": 2,
+    "queue_size": 3
+  }
+}
+```
+
+常见 `stage`：
+
+| stage | 说明 |
+|------|------|
+| `preparing` | AI 后处理准备开始 |
+| `queued` | 等待 LLM 并发槽位 |
+| `running` | LLM 请求已开始 |
+| `retrying` | 遇到限流、超时或 5xx，正在重试 |
+
+相关环境变量：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `LLM_MAX_CONCURRENT` | `0` | 全局并发覆盖值。`0` 表示使用 provider 默认值 |
+| `LLM_TENCENT_MAX_CONCURRENT` | `5` | 腾讯/混元 provider 的并发上限 |
+| `LLM_DEFAULT_MAX_CONCURRENT` | `50` | 非腾讯 provider 的并发上限 |
+| `LLM_MAX_TOKENS` | `4000` | 单次 AI 回复的最大生成 token 数。`0` 表示使用 provider 默认值 |
+| `LLM_QUEUE_MAX_SIZE` | `100` | 最多等待中的 LLM 请求数 |
+| `LLM_QUEUE_TIMEOUT` | `60` | 等待槽位的最长秒数 |
+| `LLM_MIN_INTERVAL_MS` | `500` | 两次 LLM 请求启动之间的最小间隔 |
+| `LLM_MAX_RETRIES` | `3` | 429、超时、5xx 等可重试错误的重试次数 |
+
+### 音频时长限制
+
+WebSocket 录音音频按 16kHz / 16bit / 单声道 PCM 计算，当前默认最长 `600` 秒，也就是 10 分钟。
+
+超限时服务端会发送：
+
+```json
+{
+  "type": "error",
+  "message": "Streaming audio exceeds max duration: 600s"
+}
+```
+
+随后连接会以 code `4009` 关闭，reason 为 `Audio duration limit exceeded`。
+
+可通过环境变量调整：
+
+```env
+STREAM_MAX_SESSION_DURATION=600
+```
+
+### `/ws/chat` 情景对话上下文
+
+`/ws/chat` 支持服务端会话历史。首轮可以不传 `session_id`，服务端会在 `chat_done.data.chat_session_id` 中返回情景对话会话 ID。后续轮次需要把这个 ID 放回 config 的 `session_id` 字段，服务端会自动带上历史消息。
+
+首轮 config：
+
+```json
+{
+  "type": "config",
+  "data": {
+    "scene": "interview",
+    "language": "zh",
+    "enable_tts": true
+  }
+}
+```
+
+首轮完成：
+
+```json
+{
+  "type": "chat_done",
+  "data": {
+    "session_id": "streaming-session-id",
+    "chat_session_id": "chat-session-id",
+    "user_text": "我的回答...",
+    "assistant_text": "AI 回复...",
+    "tts_url": "https://..."
+  }
+}
+```
+
+后续轮 config：
+
+```json
+{
+  "type": "config",
+  "data": {
+    "session_id": "chat-session-id",
+    "scene": "interview",
+    "language": "zh",
+    "enable_tts": true
+  }
+}
+```
+
+`/ws/chat` 会话由服务端内存管理，默认空闲 `CHAT_SESSION_TTL=3600` 秒后过期，并由后台任务定期清理。
+
+### `/ws/chat` 服务端消息
+
+录音期间：
+
+```json
+{
+  "type": "asr_partial",
+  "data": {
+    "text": "实时识别文本"
+  }
+}
+```
+
+AI 回复期间：
+
+```json
+{
+  "type": "llm_delta",
+  "data": {
+    "text": "增量文本"
+  }
+}
+```
+
+TTS 开启时：
+
+```json
+{
+  "type": "tts_chunk",
+  "data": {
+    "audio": "base64-encoded-mp3-chunk"
+  }
+}
+```
+
+完成时：
+
+```json
+{
+  "type": "chat_done",
+  "data": {
+    "session_id": "streaming-session-id",
+    "chat_session_id": "chat-session-id",
+    "user_text": "用户识别文本",
+    "assistant_text": "AI 完整回复",
+    "tts_url": "可选，合成音频上传后的 URL",
+    "blood_bar": {
+      "hp": 85,
+      "delta": -15,
+      "reason": "回答偏离主题",
+      "game_over": false
+    }
+  }
+}
+```
+
+`blood_bar` 仅在 config 中 `enable_blood_bar=true` 时可能返回。
