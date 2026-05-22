@@ -2,6 +2,7 @@
 Application configuration management.
 """
 import os
+from typing import Optional
 from functools import lru_cache
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
@@ -28,13 +29,84 @@ class Settings(BaseSettings):
 
     # Request expiration (seconds) - encrypted requests older than this are rejected
     request_expire_seconds: int = int(os.getenv("REQUEST_EXPIRE_SECONDS", "300"))
+    audio_download_max_bytes: int = int(os.getenv("AUDIO_DOWNLOAD_MAX_BYTES", str(50 * 1024 * 1024)))
+    audio_download_allow_private: bool = os.getenv("AUDIO_DOWNLOAD_ALLOW_PRIVATE", "false").lower() == "true"
+    audio_local_root: str = os.getenv("AUDIO_LOCAL_ROOT", "")
 
     # API Server Config
     api_host: str = os.getenv("API_HOST", "0.0.0.0")
     api_port: int = int(os.getenv("API_PORT", "8000"))
 
-    # Hunyuan Model Config (hunyuan-turbo = Tencent HY 2.0 Instruct)
-    hunyuan_model: str = os.getenv("HUNYUAN_MODEL", "hunyuan-turbo")
+    # LLM Provider Config (openai / tencent / anthropic)
+    llm_provider: str = os.getenv("LLM_PROVIDER", "openai")
+    llm_timeout: int = int(os.getenv("LLM_TIMEOUT", "120"))  # Timeout in seconds for LLM requests
+    # Maximum completion tokens for one LLM response. 0 means provider default.
+    llm_max_tokens: int = int(os.getenv("LLM_MAX_TOKENS", "4000"))
+    # LLM_MAX_CONCURRENT is a legacy global override. 0 means use provider defaults.
+    llm_max_concurrent: int = int(os.getenv("LLM_MAX_CONCURRENT", "0"))
+    llm_tencent_max_concurrent: int = int(os.getenv("LLM_TENCENT_MAX_CONCURRENT", "5"))
+    llm_default_max_concurrent: int = int(os.getenv("LLM_DEFAULT_MAX_CONCURRENT", "50"))
+    llm_queue_max_size: int = int(os.getenv("LLM_QUEUE_MAX_SIZE", "100"))
+    llm_queue_timeout: float = float(os.getenv("LLM_QUEUE_TIMEOUT", "60"))
+    llm_min_interval_ms: int = int(os.getenv("LLM_MIN_INTERVAL_MS", "500"))
+    llm_max_retries: int = int(os.getenv("LLM_MAX_RETRIES", "3"))
+    llm_retry_base_delay: float = float(os.getenv("LLM_RETRY_BASE_DELAY", "1.0"))
+    llm_retry_max_delay: float = float(os.getenv("LLM_RETRY_MAX_DELAY", "8.0"))
+
+    # Tencent Hunyuan Model Config
+    tencent_model: str = os.getenv("TENCENT_MODEL", "hunyuan-turbo")
+    tencent_multimodal_model: str = os.getenv("TENCENT_MULTIMODAL_MODEL", "hunyuan-multimodal")
+
+    # OpenAI Model Config
+    openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o")
+    openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
+    openai_base_url: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    openai_multimodal_model: str = os.getenv("OPENAI_MULTIMODAL_MODEL", "gpt-4o-audio-preview")
+
+    # Anthropic Model Config
+    anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
+    anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+    anthropic_multimodal_model: str = os.getenv("ANTHROPIC_MULTIMODAL_MODEL", "claude-sonnet-4-20250514")
+
+    # S3/MinIO Object Storage Config
+    s3_endpoint: str = os.getenv("S3_ENDPOINT", "")
+    s3_access_key: str = os.getenv("S3_ACCESS_KEY", "")
+    s3_secret_key: str = os.getenv("S3_SECRET_KEY", "")
+    s3_bucket_name: str = os.getenv("S3_BUCKET_NAME", "")
+    s3_prefix: str = os.getenv("S3_PREFIX", "")
+    s3_secure: bool = os.getenv("S3_SECURE", "false").lower() == "true"
+    s3_public_url: str = os.getenv("S3_PUBLIC_URL", "")
+
+    # Upload Config
+    # upload_mode: "oss" = MinIO直传OSS, "api" = POST接口上传
+    upload_mode: str = os.getenv("UPLOAD_MODE", "api")
+    upload_api_url: str = os.getenv("UPLOAD_API_URL", "")
+
+    # Thread Pool
+    sdk_thread_pool_size: int = int(os.getenv("SDK_THREAD_POOL_SIZE", "20"))
+
+    # Task Queue
+    task_cleanup_interval: int = int(os.getenv("TASK_CLEANUP_INTERVAL", "3600"))
+    task_max_age: int = int(os.getenv("TASK_MAX_AGE", "86400"))
+
+    # Monitoring
+    monitoring_enabled: bool = os.getenv("MONITORING_ENABLED", "true").lower() == "true"
+    monitoring_retention_days: int = int(os.getenv("MONITORING_RETENTION_DAYS", "30"))
+
+    # Streaming
+    stream_max_session_duration: int = int(os.getenv("STREAM_MAX_SESSION_DURATION", "600"))
+    stream_audio_buffer_size: int = int(os.getenv("STREAM_AUDIO_BUFFER_SIZE", "1048576"))
+
+    # Chat Session
+    chat_session_ttl: int = int(os.getenv("CHAT_SESSION_TTL", "3600"))  # 1 hour
+
+    # LLM Pricing (per 1M tokens, USD)
+    tencent_input_price: float = float(os.getenv("TENCENT_INPUT_PRICE", "0.5"))
+    tencent_output_price: float = float(os.getenv("TENCENT_OUTPUT_PRICE", "1.0"))
+    openai_input_price: float = float(os.getenv("OPENAI_INPUT_PRICE", "2.5"))
+    openai_output_price: float = float(os.getenv("OPENAI_OUTPUT_PRICE", "10.0"))
+    anthropic_input_price: float = float(os.getenv("ANTHROPIC_INPUT_PRICE", "3.0"))
+    anthropic_output_price: float = float(os.getenv("ANTHROPIC_OUTPUT_PRICE", "15.0"))
 
     class Config:
         env_file = ".env"

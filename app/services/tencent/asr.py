@@ -2,17 +2,16 @@
 Tencent Cloud ASR (Automatic Speech Recognition) service using Flash Recognizer SDK.
 """
 import asyncio
+import ipaddress
 import json
-import sys
-import os
+import socket
 from typing import Optional
+from urllib.parse import urlparse
 
 import httpx
 
-# Add SDK path to sys.path
-SDK_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "core", "util", "tencentcloud-speech-sdk-python")
-if SDK_PATH not in sys.path:
-    sys.path.insert(0, SDK_PATH)
+from app.core.thread_pool import ThreadPool
+from app.core.sdk_path import SDK_PATH  # noqa: F401 — ensures SDK is on sys.path
 
 from common.credential import Credential
 from asr.flash_recognizer import FlashRecognizer, FlashRecognitionRequest
@@ -36,10 +35,61 @@ class ASRService:
 
     async def download_audio(self, url: str) -> bytes:
         """Download audio file from URL asynchronously."""
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            return response.content
+        await self._validate_download_url(url)
+        max_bytes = max(1, settings.audio_download_max_bytes)
+
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=False) as client:
+            async with client.stream("GET", url) as response:
+                response.raise_for_status()
+
+                content_length = response.headers.get("content-length")
+                if content_length:
+                    try:
+                        declared_size = int(content_length)
+                    except ValueError:
+                        declared_size = None
+                    if declared_size and declared_size > max_bytes:
+                        raise ValueError(f"Audio file is too large: {content_length} bytes")
+
+                chunks = []
+                total = 0
+                async for chunk in response.aiter_bytes():
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise ValueError(f"Audio file exceeds limit: {max_bytes} bytes")
+                    chunks.append(chunk)
+
+        return b"".join(chunks)
+
+    async def _validate_download_url(self, url: str) -> None:
+        """Validate remote audio URL to reduce SSRF risk."""
+        parsed = urlparse(str(url))
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError("audio_url must use http or https")
+        if not parsed.hostname:
+            raise ValueError("audio_url host is required")
+
+        if settings.audio_download_allow_private:
+            return
+
+        host = parsed.hostname
+
+        def _resolve_host() -> list[str]:
+            infos = socket.getaddrinfo(host, parsed.port or 443, type=socket.SOCK_STREAM)
+            return list({info[4][0] for info in infos})
+
+        addresses = await asyncio.to_thread(_resolve_host)
+        for address in addresses:
+            ip = ipaddress.ip_address(address)
+            if (
+                ip.is_private
+                or ip.is_loopback
+                or ip.is_link_local
+                or ip.is_multicast
+                or ip.is_reserved
+                or ip.is_unspecified
+            ):
+                raise ValueError(f"audio_url resolves to a blocked address: {address}")
 
     async def convert_audio(self, audio_data: bytes) -> bytes:
         """
@@ -61,7 +111,8 @@ class ASRService:
     def _sync_recognize(
         self,
         audio_data: bytes,
-        engine_type: str
+        engine_type: str,
+        word_info: int = 0
     ) -> dict:
         """Synchronous recognition using Flash Recognizer SDK."""
         import logging
@@ -77,10 +128,10 @@ class ASRService:
         req.set_filter_modal(0)
         req.set_filter_punc(0)
         req.set_convert_num_mode(1)
-        req.set_word_info(0)
+        req.set_word_info(word_info)  # 0: no timestamp, 1: word timestamp (no punctuation), 2: word timestamp (with punctuation)
         req.set_first_channel_only(1)
 
-        logger.info(f"ASR: audio_data size = {len(audio_data)} bytes")
+        logger.info(f"ASR: audio_data size = {len(audio_data)} bytes, word_info = {word_info}")
 
         # Execute recognition
         result_data = recognizer.recognize(req, audio_data)
@@ -97,7 +148,8 @@ class ASRService:
         self,
         audio_data: bytes,
         engine_type: str = "16k_zh",
-        voice_format: str = "wav"
+        voice_format: str = "wav",
+        word_info: int = 0
     ) -> dict:
         """
         Recognize speech in audio using Flash Recognizer API.
@@ -108,18 +160,20 @@ class ASRService:
             audio_data: Audio file bytes (any format supported by ffmpeg).
             engine_type: Recognition engine type (16k_zh, 16k_en, etc.)
             voice_format: Ignored - audio will be converted to WAV.
+            word_info: Word level timestamp. 0: no timestamp, 1: word timestamp (no punctuation), 2: word timestamp (with punctuation).
 
         Returns:
-            Recognition result dict with 'text' and 'raw_response'.
+            Recognition result dict with 'text', 'word_info_list', and 'raw_response'.
         """
         # Convert audio to standard format: 16kHz, 16bit, mono, WAV
         audio_data = await self.convert_audio(audio_data)
 
-        # Run sync recognition in thread pool
-        result = await asyncio.to_thread(
+        # Run sync recognition in centralized thread pool
+        result = await ThreadPool.run(
             self._sync_recognize,
             audio_data,
-            engine_type
+            engine_type,
+            word_info
         )
 
         # Check for errors
@@ -129,13 +183,26 @@ class ASRService:
 
         # Extract text from flash_result
         text = ""
+        word_info_list = []
         flash_result = result.get("flash_result", [])
         if flash_result:
             # Get text from first channel
             text = flash_result[0].get("text", "")
+            # Extract word info if available
+            if "sentence_list" in flash_result[0]:
+                for sentence in flash_result[0]["sentence_list"]:
+                    if "word_list" in sentence:
+                        for word in sentence["word_list"]:
+                            word_info_list.append({
+                                "word": word.get("word", ""),
+                                "begin_time": word.get("begin_time", 0),
+                                "end_time": word.get("end_time", 0),
+                                "duration": word.get("end_time", 0) - word.get("begin_time", 0)
+                            })
 
         return {
             "text": text,
+            "word_info_list": word_info_list,
             "raw_response": result
         }
 

@@ -114,8 +114,8 @@ class EvaluationCallbackData(BaseModel):
     message: str = Field(..., description="Status message")
 
     # AI Report (sent via callback)
-    evaluation_report: Optional[str] = Field(
-        None, description="AI-generated evaluation report in Markdown format"
+    evaluation_report: Optional[dict] = Field(
+        None, description="AI-generated evaluation report in JSON format"
     )
 
     # Error info
@@ -144,8 +144,8 @@ class EvaluationResponse(BaseModel):
     low_score_words: Optional[List[WordScore]] = Field(
         None, description="Words with low pronunciation scores"
     )
-    evaluation_report: Optional[str] = Field(
-        None, description="AI-generated evaluation report in Markdown format"
+    evaluation_report: Optional[dict] = Field(
+        None, description="AI-generated evaluation report in JSON format"
     )
 
     # Error info
@@ -286,3 +286,314 @@ class FullReport(BaseModel):
     strengths: List[str] = Field(default_factory=list, description="优点")
     improvements: List[str] = Field(default_factory=list, description="改进意见")
     weak_paragraphs: List[ParagraphAnalysis] = Field(default_factory=list, description="读的不太好的段落")
+
+
+class TextAnalysisRequest(BaseModel):
+    """Request model for text structure analysis."""
+
+    text: str = Field(..., description="待分析的文本内容", min_length=10, max_length=50000)
+    custom_prompt: Optional[str] = Field(None, description="自定义分析要求")
+    message_id: Optional[str] = Field(None, description="消息ID，不传则自动生成UUID")
+
+
+class TextAnalysisResponse(BaseModel):
+    """Response model for text structure analysis."""
+
+    success: bool = Field(..., description="是否成功")
+    message: str = Field(..., description="状态消息")
+    message_id: str = Field(..., description="消息ID")
+    analysis_result: Optional[str] = Field(None, description="分析结果（JSON格式字符串）")
+    error: Optional[str] = Field(None, description="错误信息")
+
+
+class TongueTwisterRequest(BaseModel):
+    """Request model for tongue twister pronunciation analysis."""
+
+    text: str = Field(..., description="绕口令文本", min_length=2, max_length=5000)
+    language: str = Field(default="zh", description="语言：'zh'中文，'en'英文")
+    message_id: Optional[str] = Field(None, description="消息ID，不传则自动生成UUID")
+
+
+class TongueTwisterResponse(BaseModel):
+    """Response model for tongue twister pronunciation analysis."""
+
+    success: bool = Field(..., description="是否成功")
+    message: str = Field(..., description="状态消息")
+    message_id: str = Field(..., description="消息ID")
+    tongue_twister: str = Field(..., description="绕口令原文")
+    analysis_result: Optional[str] = Field(None, description="发音分析结果（JSON格式字符串）")
+    error: Optional[str] = Field(None, description="错误信息")
+
+
+class SentenceInterpretationRequest(BaseModel):
+    """Request model for sentence interpretation."""
+
+    text: str = Field(..., description="待解读的句子内容", min_length=1, max_length=5000)
+    custom_prompt: Optional[str] = Field(None, description="自定义解读要求")
+    message_id: Optional[str] = Field(None, description="消息ID，不传则自动生成UUID")
+
+
+class SentenceInterpretationResponse(BaseModel):
+    """Response model for sentence interpretation."""
+
+    success: bool = Field(..., description="是否成功")
+    message: str = Field(..., description="状态消息")
+    message_id: str = Field(..., description="消息ID")
+    interpretation: Optional[dict] = Field(None, description="AI解读结果JSON对象，包含中心内容、朗读重点、注意事项")
+    error: Optional[str] = Field(None, description="错误信息")
+
+
+class StoryReadingRequest(BaseModel):
+    """Request model for story reading evaluation."""
+
+    audio_url: HttpUrl = Field(..., description="音频文件URL")
+    story_text: str = Field(..., description="短故事文本，用户要围绕此故事发挥", min_length=10, max_length=2000)
+    message_id: Optional[str] = Field(None, description="消息ID，不传则自动生成UUID")
+
+
+class StoryReadingResponse(BaseModel):
+    """Response model for story reading evaluation."""
+
+    success: bool = Field(..., description="是否成功")
+    message: str = Field(..., description="状态消息")
+    message_id: str = Field(..., description="消息ID")
+
+    # 结构完整性分析
+    structure_analysis: Optional[dict] = Field(
+        None, description="结构完整性分析（开头、发展、高潮、结尾）"
+    )
+
+    # 逻辑连贯性分析
+    logic_analysis: Optional[dict] = Field(
+        None, description="逻辑连贯性分析（时间跳跃、因果错误、事件遗漏、逻辑矛盾）"
+    )
+
+    # 语言流畅度分析
+    fluency_analysis: Optional[dict] = Field(
+        None, description="语言流畅度分析（长停顿、重复修正、填空词、完整度）"
+    )
+
+    # 事件分布分析
+    event_distribution: Optional[dict] = Field(
+        None, description="事件分布（各事件的时间位置和时长）"
+    )
+
+    # 待改进
+    improvements: List[str] = Field(
+        default_factory=list, description="待改进建议列表"
+    )
+
+    # 综合评分
+    overall_score: Optional[dict] = Field(
+        None, description="综合评分（score/level/comment）"
+    )
+
+    # ASR时间戳数据
+    asr_data: Optional[dict] = Field(
+        None, description="ASR识别结果（带时间戳）"
+    )
+
+    error: Optional[str] = Field(None, description="错误信息")
+
+
+class TongueTwisterReadingRequest(BaseModel):
+    """Request model for tongue twister / article speech evaluation."""
+
+    audio_url: HttpUrl = Field(..., description="音频文件URL")
+    tongue_twister_text: str = Field(
+        ..., description="原文文本（绕口令或文章）", min_length=2, max_length=5000
+    )
+    eval_type: str = Field(
+        default="tongue_twister",
+        description="评测类型：tongue_twister(绕口令，默认)、article(文章朗读)"
+    )
+    score_coeff: float = Field(
+        default=1.0,
+        ge=1.0,
+        le=4.0,
+        description="SOE评分苛刻指数：1.0(儿童/宽松) 2.0(标准) 4.0(成人/严格)"
+    )
+    message_id: Optional[str] = Field(None, description="消息ID，不传则自动生成UUID")
+
+
+class TongueTwisterReadingResponse(BaseModel):
+    """Response model for tongue twister speech evaluation."""
+
+    success: bool = Field(..., description="是否成功")
+    message: str = Field(..., description="状态消息")
+    message_id: str = Field(..., description="消息ID")
+
+    # SOE完整评分数据
+    speech_scores: Optional[SpeechScores] = Field(
+        None, description="语音评测评分（准确度、流利度、完整度等）"
+    )
+    statistics: Optional[EvaluationStatistics] = Field(
+        None, description="评测统计数据"
+    )
+    soe_words: Optional[List[dict]] = Field(
+        None, description="SOE逐字评分详情（每个字的准确度、流利度、音素信息）"
+    )
+    low_score_words: Optional[List[dict]] = Field(
+        None, description="低分字词列表（准确度<90分）"
+    )
+    soe_sentences: Optional[List[dict]] = Field(
+        None, description="SOE句子级评分详情"
+    )
+    soe_data: Optional[dict] = Field(
+        None, description="SOE完整原始评测数据"
+    )
+
+    # AI分析结果
+    strengths: List[str] = Field(
+        default_factory=list, description="优势列表"
+    )
+    improvements: Optional[dict] = Field(
+        None,
+        description="待提升分析，包含extra_words(多读)、pronunciation_issues(发音问题)"
+    )
+    fluency_analysis: Optional[dict] = Field(
+        None, description="流畅度分析（基于时间戳数据）"
+    )
+    overall_assessment: Optional[str] = Field(
+        None, description="总体评价"
+    )
+    practice_suggestions: List[str] = Field(
+        default_factory=list, description="练习建议列表"
+    )
+    speech_rate_analysis: Optional[dict] = Field(
+        None, description="语速分析（仅article模式，含整体语速、分段语速、快慢段落）"
+    )
+    pause_analysis: Optional[dict] = Field(
+        None, description="断句停顿分析（仅article模式，含正确停顿、不当停顿、遗漏停顿）"
+    )
+
+    # ASR完整数据
+    asr_data: Optional[dict] = Field(
+        None, description="ASR识别结果（含时间戳），包含text和word_info_list"
+    )
+
+    error: Optional[str] = Field(None, description="错误信息")
+
+
+class ChatMessage(BaseModel):
+    """Single message in a conversation."""
+
+    role: str = Field(..., description="消息角色：system / user / assistant")
+    content: str = Field(..., description="消息内容")
+
+
+class VoiceChatRequest(BaseModel):
+    """Request model for voice chat conversation."""
+
+    audio_url: HttpUrl = Field(..., description="用户语音文件URL")
+    session_id: Optional[str] = Field(
+        None, description="会话ID，不传则创建新会话。传入则复用服务端存储的对话历史"
+    )
+    mode: str = Field(
+        default="traditional",
+        description="对话模式：traditional(ASR转文字后LLM对话)、multimodal(多模态模型直接处理音频)"
+    )
+    messages: Optional[List[ChatMessage]] = Field(
+        None, description="对话历史（兼容旧模式，优先使用服务端会话）"
+    )
+    system_prompt: Optional[str] = Field(
+        None, description="自定义系统提示词，优先级高于scene预设场景"
+    )
+    scene: Optional[str] = Field(
+        None,
+        description="预设场景类型：interview(面试)、daily(日常对话)、customer_service(客服)"
+    )
+    voice_type: int = Field(
+        default=101001,
+        description="TTS音色ID：101001(智瑜-女)、101005(智华-男)、101050(英文女)、101051(英文男)"
+    )
+    message_id: Optional[str] = Field(None, description="消息ID，不传则自动生成UUID")
+
+
+class VoiceChatResponse(BaseModel):
+    """Response model for voice chat conversation."""
+
+    success: bool = Field(..., description="是否成功")
+    message: str = Field(..., description="状态消息")
+    message_id: str = Field(..., description="消息ID")
+    session_id: Optional[str] = Field(None, description="会话ID，后续对话传入可复用历史")
+
+    user_text: Optional[str] = Field(None, description="ASR识别的用户语音文本（multimodal模式下为null）")
+    assistant_text: Optional[str] = Field(None, description="AI回复文本")
+    audio_base64: Optional[str] = Field(None, description="AI回复的TTS音频Base64编码(mp3格式)")
+
+    # ASR原始数据
+    asr_data: Optional[dict] = Field(
+        None, description="ASR识别结果，包含text（仅traditional模式）"
+    )
+
+    error: Optional[str] = Field(None, description="错误信息")
+
+
+class OpinionStatementRequest(BaseModel):
+    """Request model for one-minute opinion statement evaluation."""
+
+    audio_url: HttpUrl = Field(..., description="音频文件URL")
+    ref_text: Optional[str] = Field(None, description="参考文本，用于SOE评测对照（不传则SOE使用自由说模式）")
+    topic: Optional[str] = Field(None, description="观点陈述的题目/话题，用于分析贴题性")
+    score_coeff: float = Field(
+        default=1.0,
+        ge=1.0,
+        le=4.0,
+        description="SOE评分苛刻指数：1.0(宽松) 2.0(标准) 4.0(严格)"
+    )
+    language: str = Field(default="zh", description="语言：'zh'中文，'en'英文")
+    message_id: Optional[str] = Field(None, description="消息ID，不传则自动生成UUID")
+
+
+class OpinionStatementResponse(BaseModel):
+    """Response model for one-minute opinion statement evaluation."""
+
+    success: bool = Field(..., description="是否成功")
+    message: str = Field(..., description="状态消息")
+    message_id: str = Field(..., description="消息ID")
+    audio_url: str = Field(..., description="音频URL")
+    speech_text: Optional[str] = Field(None, description="语音转写文本（ASR识别结果）")
+    speech_rate: Optional[float] = Field(None, description="语速（字/分钟或词/分钟）")
+
+    # SOE评分数据
+    speech_scores: Optional[SpeechScores] = Field(None, description="语音评测评分")
+    statistics: Optional[EvaluationStatistics] = Field(None, description="评测统计数据")
+    low_score_words: Optional[List[WordScore]] = Field(None, description="低分字词列表")
+
+    # AI评测报告
+    evaluation_report: Optional[dict] = Field(None, description="AI生成的观点陈述评测报告（JSON格式）")
+    error: Optional[str] = Field(None, description="错误信息")
+class ImpromptuReactionRequest(BaseModel):
+    """Request model for impromptu reaction (即兴反应) evaluation."""
+
+    audio_url: HttpUrl = Field(..., description="音频文件URL")
+    scenario: str = Field(..., description="触发情境/题目")
+    score_coeff: float = Field(
+        default=3.5,
+        ge=1.0,
+        le=4.0,
+        description="SOE评分苛刻指数：默认3.5（偏严格）"
+    )
+    language: str = Field(default="zh", description="语言：'zh'中文，'en'英文")
+    message_id: Optional[str] = Field(None, description="消息ID，不传则自动生成UUID")
+
+
+class ImpromptuReactionResponse(BaseModel):
+    """Response model for impromptu reaction evaluation."""
+
+    success: bool = Field(..., description="是否成功")
+    message: str = Field(..., description="状态消息")
+    message_id: str = Field(..., description="消息ID")
+    audio_url: str = Field(..., description="音频URL")
+    speech_text: Optional[str] = Field(None, description="语音转写文本（ASR识别结果）")
+    speech_rate: Optional[float] = Field(None, description="语速（字/分钟或词/分钟）")
+
+    # SOE评分数据
+    speech_scores: Optional[SpeechScores] = Field(None, description="语音评测评分")
+    statistics: Optional[EvaluationStatistics] = Field(None, description="评测统计数据")
+    low_score_words: Optional[List[WordScore]] = Field(None, description="低分字词列表")
+
+    # AI评测报告
+    evaluation_report: Optional[dict] = Field(None, description="AI生成的即兴反应评测报告（JSON格式）")
+    error: Optional[str] = Field(None, description="错误信息")

@@ -6,14 +6,69 @@ A FastAPI application that provides speech evaluation services:
 - Speech scoring (SOE)
 - AI-powered evaluation report generation (Hunyuan)
 """
+import logging
+import asyncio
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.api.v1 import api_router
 
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan: startup and shutdown events."""
+    # Startup
+    logger.info("Application starting up...")
+    chat_cleanup_task = asyncio.create_task(_cleanup_chat_sessions_periodically())
+    app.state.chat_cleanup_task = chat_cleanup_task
+    yield
+    # Shutdown
+    logger.info("Application shutting down...")
+    chat_cleanup_task.cancel()
+    try:
+        await chat_cleanup_task
+    except asyncio.CancelledError:
+        pass
+    # Clean up singletons
+    try:
+        from app.core.thread_pool import ThreadPool
+        ThreadPool.shutdown()
+    except Exception as e:
+        logger.warning(f"ThreadPool shutdown error: {e}")
+    try:
+        from app.services.tasks.callback import callback_dispatcher
+        await callback_dispatcher.close()
+    except Exception as e:
+        logger.warning(f"CallbackDispatcher close error: {e}")
+    try:
+        from app.services.chat.session_manager import chat_session_manager
+        await chat_session_manager.cleanup_expired()
+    except Exception as e:
+        logger.warning(f"ChatSessionManager cleanup error: {e}")
+
+
+async def _cleanup_chat_sessions_periodically():
+    """Periodically remove expired voice-chat sessions."""
+    from app.services.chat.session_manager import chat_session_manager
+
+    interval = max(60, min(settings.chat_session_ttl, 300))
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            await chat_session_manager.cleanup_expired()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"Periodic ChatSessionManager cleanup error: {e}")
+
 app = FastAPI(
     title=settings.app_name,
+    lifespan=lifespan,
     description="""
 ## 语音演讲评测 API
 
@@ -33,122 +88,73 @@ Body: {"aes_key": "your_aes_key"}
 
 ---
 
-## 接口分类
+## 接口分组
 
-### 1. SOE 简单语音评测 (`/api/v1/soe`)
+### Evaluation - 综合评测
+| 接口 | 说明 |
+|------|------|
+| `POST /evaluation/signature` | 生成 AES 签名 |
+| `POST /evaluation/analyze` | 语音评测（URL，异步回调） |
+| `POST /evaluation/analyze/upload` | 语音评测（上传文件，异步回调） |
+| `POST /evaluation/report` | AI 评测报告（URL，同步） |
+| `POST /evaluation/report/upload` | AI 评测报告（上传文件，同步） |
+| `POST /evaluation/text-analysis` | 文本结构分析 |
+| `POST /evaluation/tongue-twister` | 绕口令发音分析（纯文本） |
+| `POST /evaluation/sentence-interpretation` | 句子解读分析 |
+| `POST /evaluation/story-reading` | 故事阅读评测（ASR + AI 分析） |
+| `POST /evaluation/tongue-twister-reading` | 绕口令/文章朗读评测（ASR + SOE + AI 分析） |
+| `POST /evaluation/voice-chat` | 语音对话（传统/多模态 + 服务端会话管理） |
+| `POST /evaluation/voice-chat/scene` | 会话级场景切换 |
+| `POST /evaluation/opinion-statement` | 一分钟观点陈述评测（ASR + SOE + AI 分析），评测观点明确性、结构完整度、逻辑清晰度、时间节奏、表达精炼度 |
+| `POST /evaluation/impromptu-reaction` | 即兴反应评测（ASR + SOE + AI 分析），评测反应速度、结构形成、内容切题、逻辑连贯、表达冗余 |
 
-仅进行语音评分，**同步返回**结果，适合快速评测场景。
+### Agents - 独立评测代理
+| 接口 | 说明 |
+|------|------|
+| `POST /agents/asr` | 独立 ASR 语音转文字 |
+| `POST /agents/soe` | 独立 SOE 语音评分 |
+| `POST /agents/content` | 独立内容分析 |
+| `POST /agents/fluency` | 独立流畅度分析 |
+| `POST /agents/report` | 独立报告生成 |
 
-| 接口 | 方法 | 说明 |
-|-----|------|-----|
-| `/api/v1/soe/upload` | POST | 上传音频文件评测 |
-| `/api/v1/soe/url` | POST | 通过URL评测音频 |
-| `/api/v1/soe/audio/{filename}` | GET | 获取已上传的音频文件 |
+### Tasks - 异步任务管理
+| 接口 | 说明 |
+|------|------|
+| `GET /tasks/` | 查询任务列表 |
+| `GET /tasks/{task_id}` | 查询任务状态 |
+| `GET /tasks/stats` | 任务统计 |
 
-**请求示例 (upload)：**
-```
-POST /api/v1/soe/upload
-Content-Type: multipart/form-data
-X-Signature: <签名>
+### Monitoring - 使用监控
+| 接口 | 说明 |
+|------|------|
+| `GET /monitoring/usage` | 使用量汇总 |
+| `GET /monitoring/usage/daily` | 每日使用量 |
+| `GET /monitoring/usage/provider` | 按供应商统计 |
+| `GET /monitoring/usage/endpoint` | 按接口统计 |
+| `GET /monitoring/usage/agent` | 按代理统计 |
+| `GET /monitoring/cost` | 费用汇总 |
+| `POST /monitoring/cost/estimate` | 费用估算 |
 
-file: 音频文件
-message_id: 可选，不传自动生成
-eval_mode: 3 (自由说模式)
-score_coeff: 2.0 (标准评分)
-```
+### Streaming - 实时流式评测
+| 接口 | 说明 |
+|------|------|
+| `WS /streaming/ws/stream` | WebSocket 实时音频流评测 |
 
-**请求示例 (url)：**
-```json
-POST /api/v1/soe/url
-{
-    "audio_url": "https://example.com/audio.mp3",
-    "message_id": "optional-id",
-    "eval_mode": 3,
-    "score_coeff": 2.0
-}
-```
+### SOE - 语音评分
+| 接口 | 说明 |
+|------|------|
+| `POST /soe/upload` | 语音评分（上传文件） |
+| `POST /soe/url` | 语音评分（URL） |
 
----
-
-### 2. 完整语音评测 (`/api/v1/evaluation`)
-
-包含 ASR 转写 + SOE 评分 + AI 报告生成，**异步回调**返回结果。
-
-| 接口 | 方法 | 说明 |
-|-----|------|-----|
-| `/api/v1/evaluation/signature` | POST | 生成认证签名 |
-| `/api/v1/evaluation/analyze` | POST | 通过URL提交评测任务 |
-| `/api/v1/evaluation/analyze/upload` | POST | 上传文件提交评测任务 |
-
-**工作流程：**
-1. 调用接口 → 立即返回 `message_id`
-2. 后台异步处理（ASR + SOE + AI报告）
-3. 处理完成后 POST 回调到 `callback_url`
-
-**请求示例 (analyze)：**
-```json
-POST /api/v1/evaluation/analyze
-{
-    "audio_url": "https://example.com/audio.mp3",
-    "language": "zh",
-    "callback_url": "https://your-server.com/callback",
-    "message_id": "optional-id"
-}
-```
-
-**立即返回：**
-```json
-{
-    "success": true,
-    "message": "Task accepted",
-    "message_id": "uuid"
-}
-```
-
-**回调数据 (POST 到 callback_url)：**
-```json
-{
-    "message_id": "uuid",
-    "success": true,
-    "speech_text": "转写文字",
-    "speech_scores": {...},
-    "evaluation_report": "AI生成的Markdown报告"
-}
-```
+### TTS - 语音合成
+| 接口 | 说明 |
+|------|------|
+| `POST /tts/synthesize` | 文字转语音 |
+| `GET /tts/synthesize` | 文字转语音（GET） |
+| `GET /tts/voices` | 获取可用音色列表 |
 
 ---
 
-## 评测参数说明
-
-**eval_mode 评测模式：**
-| 值 | 说明 |
-|---|---|
-| 0 | 单词/单字模式 |
-| 1 | 句子模式 |
-| 2 | 段落模式 |
-| 3 | 自由说模式（默认） |
-
-**score_coeff 评分系数：**
-| 值 | 说明 |
-|---|---|
-| 1.0 | 儿童模式（宽松） |
-| 2.0 | 标准模式（默认） |
-| 4.0 | 成人严格模式 |
-
-**engine_model_type 语言：**
-| 值 | 说明 |
-|---|---|
-| 16k_zh | 中文 |
-| 16k_en | 英文 |
-
----
-
-## 音频要求
-
-- **支持格式：** WAV, MP3, M4A, OGG, FLAC 等（ffmpeg 支持的格式）
-- **自动转换：** 音频会自动转换为 16kHz, 16bit, 单声道
-- **文件大小：** URL 模式最大 50MB
-- **时长限制：** 最大 300 秒
     """,
     version=settings.app_version,
     docs_url="/docs",
@@ -166,6 +172,8 @@ app.add_middleware(
 
 # Include API v1 router
 app.include_router(api_router, prefix="/api/v1")
+# 兼容小程序端多了一层 /api 前缀的情况
+app.include_router(api_router, prefix="/api/api/v1")
 
 
 @app.get("/")

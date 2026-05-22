@@ -1,0 +1,244 @@
+# -*- coding: utf-8 -*-
+"""
+TTS (Text-to-Speech) endpoint - returns S3 URL for audio file.
+"""
+from fastapi import APIRouter, HTTPException, Header, Query
+from typing import Optional
+from pydantic import BaseModel, Field
+
+from app.core.config import settings
+from app.core.security import aes_service
+from app.services.tencent import tts_service
+
+router = APIRouter()
+
+
+def verify_signature(signature: Optional[str]) -> None:
+    """Verify AES signature from header, raise HTTPException if invalid."""
+    if not signature:
+        raise HTTPException(status_code=401, detail="Missing X-Signature header")
+
+    success, message = aes_service.verify_signature(
+        signature,
+        max_age_seconds=settings.request_expire_seconds
+    )
+    if not success:
+        raise HTTPException(status_code=401, detail=message)
+
+
+class TTSRequest(BaseModel):
+    """TTS request body."""
+    text: str = Field(..., description="Text to synthesize", max_length=5000)
+    voice_type: int = Field(
+        default=101001,
+        description="Voice type ID. Standard: 101001(智瑜-女), 101005(智华-男). Super-natural: 502001-502007, 602003-602005, 603000-603007"
+    )
+    codec: str = Field(
+        default="mp3",
+        description="Audio format: 'mp3' or 'pcm'"
+    )
+    sample_rate: int = Field(
+        default=16000,
+        description="Sample rate: 8000 or 16000"
+    )
+    speed: float = Field(
+        default=1.0,
+        ge=-2.0,
+        le=6.0,
+        description="Speech speed, range -2.0 to 6.0"
+    )
+    volume: float = Field(
+        default=0.0,
+        ge=-10.0,
+        le=10.0,
+        description="Volume adjustment in dB, range -10.0 to 10.0"
+    )
+
+
+@router.post("/synthesize")
+async def synthesize_speech(
+    request: TTSRequest,
+    x_signature: Optional[str] = Header(None, alias="X-Signature")
+):
+    """
+    Synthesize text to speech and return S3 URL.
+
+    **Headers**:
+    - X-Signature: AES encrypted signature (required)
+
+    **Request body**:
+    ```json
+    {
+        "text": "要合成的文本",
+        "voice_type": 101001,
+        "codec": "mp3",
+        "sample_rate": 16000,
+        "speed": 1.0,
+        "volume": 0.0
+    }
+    ```
+
+    **Voice Types**:
+    - 101001: 智瑜 (通用女声)
+    - 101002: 智聆 (通用女声)
+    - 101003: 智美 (客服女声)
+    - 101004: 智云 (通用女声)
+    - 101005: 智华 (通用男声)
+    - 101006: 智龙 (新闻男声)
+    - 101007: 智明 (新闻男声)
+    - 101050: WeJack (英文女声)
+    - 101051: WeRose (英文男声)
+
+    **Response**:
+    ```json
+    {
+        "success": true,
+        "url": "https://liaoyu-public.oss-cn-beijing.aliyuncs.com/upload/...",
+        "fileName": "tts_xxx.mp3",
+        "ossId": "123456"
+    }
+    ```
+    """
+    verify_signature(x_signature)
+
+    if not request.text.strip():
+        raise HTTPException(status_code=400, detail="Text cannot be empty")
+
+    if request.codec not in ("mp3", "pcm"):
+        raise HTTPException(status_code=400, detail="Codec must be 'mp3' or 'pcm'")
+
+    if request.sample_rate not in (8000, 16000):
+        raise HTTPException(status_code=400, detail="Sample rate must be 8000 or 16000")
+
+    # Synthesize and upload to S3
+    result = await tts_service.synthesize_and_upload(
+        text=request.text,
+        voice_type=request.voice_type,
+        codec=request.codec,
+        sample_rate=request.sample_rate,
+        speed=request.speed,
+        volume=request.volume
+    )
+
+    if not result["success"]:
+        raise HTTPException(status_code=500, detail=result.get("error", "Upload failed"))
+
+    return {
+        "success": True,
+        "url": result["url"],
+        "fileName": result.get("fileName"),
+        "ossId": result.get("ossId")
+    }
+
+
+@router.get("/synthesize")
+async def synthesize_speech_get(
+    text: str = Query(..., description="Text to synthesize", max_length=5000),
+    voice_type: int = Query(101001, description="Voice type ID"),
+    codec: str = Query("mp3", description="Audio format: 'mp3' or 'pcm'"),
+    sample_rate: int = Query(16000, description="Sample rate: 8000 or 16000"),
+    speed: float = Query(1.0, ge=-2.0, le=6.0, description="Speech speed"),
+    volume: float = Query(0.0, ge=-10.0, le=10.0, description="Volume adjustment in dB"),
+    x_signature: Optional[str] = Header(None, alias="X-Signature")
+):
+    """
+    Synthesize text to speech and return S3 URL (GET method).
+
+    Same as POST /synthesize but with query parameters.
+
+    **Response**:
+    ```json
+    {
+        "success": true,
+        "url": "https://liaoyu-public.oss-cn-beijing.aliyuncs.com/upload/...",
+        "fileName": "tts_xxx.mp3",
+        "ossId": "123456"
+    }
+    ```
+    """
+    verify_signature(x_signature)
+
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="Text cannot be empty")
+
+    if codec not in ("mp3", "pcm"):
+        raise HTTPException(status_code=400, detail="Codec must be 'mp3' or 'pcm'")
+
+    if sample_rate not in (8000, 16000):
+        raise HTTPException(status_code=400, detail="Sample rate must be 8000 or 16000")
+
+    # Synthesize and upload to S3
+    result = await tts_service.synthesize_and_upload(
+        text=text,
+        voice_type=voice_type,
+        codec=codec,
+        sample_rate=sample_rate,
+        speed=speed,
+        volume=volume
+    )
+
+    if not result["success"]:
+        raise HTTPException(status_code=500, detail=result.get("error", "Upload failed"))
+
+    return {
+        "success": True,
+        "url": result["url"],
+        "fileName": result.get("fileName"),
+        "ossId": result.get("ossId")
+    }
+
+
+@router.get("/voices")
+async def list_voices(
+    x_signature: Optional[str] = Header(None, alias="X-Signature")
+) -> dict:
+    """
+    List available voice types.
+
+    **Headers**:
+    - X-Signature: AES encrypted signature (required)
+
+    **Response**:
+    ```json
+    {
+        "voices": [
+            {"id": 101001, "name": "智瑜", "gender": "female", "language": "zh"},
+            ...
+        ]
+    }
+    ```
+    """
+    verify_signature(x_signature)
+
+    voices = [
+        {"id": 101001, "name": "智瑜", "gender": "female", "language": "zh", "description": "通用女声"},
+        {"id": 101002, "name": "智聆", "gender": "female", "language": "zh", "description": "通用女声"},
+        {"id": 101003, "name": "智美", "gender": "female", "language": "zh", "description": "客服女声"},
+        {"id": 101004, "name": "智云", "gender": "female", "language": "zh", "description": "通用女声"},
+        {"id": 101005, "name": "智华", "gender": "male", "language": "zh", "description": "通用男声"},
+        {"id": 101006, "name": "智龙", "gender": "male", "language": "zh", "description": "新闻男声"},
+        {"id": 101007, "name": "智明", "gender": "male", "language": "zh", "description": "新闻男声"},
+        {"id": 101050, "name": "WeJack", "gender": "female", "language": "en", "description": "英文女声"},
+        {"id": 101051, "name": "WeRose", "gender": "male", "language": "en", "description": "英文男声"},
+        # 超自然大模型音色
+        {"id": 502007, "name": "智小虎", "gender": "neutral", "language": "zh/en", "description": "聊天童声"},
+        {"id": 502006, "name": "智小悟", "gender": "neutral", "language": "zh/en", "description": "聊天男声"},
+        {"id": 502005, "name": "智小解", "gender": "neutral", "language": "zh/en", "description": "解说男声"},
+        {"id": 502004, "name": "智小满", "gender": "neutral", "language": "zh/en", "description": "营销女声"},
+        {"id": 502003, "name": "智小敏", "gender": "neutral", "language": "zh/en", "description": "聊天女声"},
+        {"id": 502001, "name": "智小柔", "gender": "neutral", "language": "zh/en", "description": "聊天女声"},
+        {"id": 602004, "name": "暖心阿灿", "gender": "neutral", "language": "zh/en", "description": "聊天男声"},
+        {"id": 602005, "name": "专业梓欣", "gender": "neutral", "language": "zh/en", "description": "聊天女声"},
+        {"id": 602003, "name": "爱小悠", "gender": "neutral", "language": "zh/en", "description": "聊天女声"},
+        # 特色音色
+        {"id": 603000, "name": "懂事少年", "gender": "neutral", "language": "zh/en", "description": "特色男声"},
+        {"id": 603001, "name": "潇湘妹妹", "gender": "neutral", "language": "zh/en", "description": "特色女声"},
+        {"id": 603002, "name": "软萌心心", "gender": "neutral", "language": "zh/en", "description": "特色男童声"},
+        {"id": 603003, "name": "随和老李", "gender": "neutral", "language": "zh/en", "description": "聊天男声"},
+        {"id": 603004, "name": "温柔小柠", "gender": "neutral", "language": "zh/en", "description": "聊天女声"},
+        {"id": 603005, "name": "知心大林", "gender": "neutral", "language": "zh/en", "description": "聊天男声"},
+        {"id": 603006, "name": "沉稳青叔", "gender": "neutral", "language": "zh/en", "description": "聊天男声"},
+        {"id": 603007, "name": "邻家女孩", "gender": "neutral", "language": "zh/en", "description": "聊天女声"},
+    ]
+
+    return {"voices": voices}
