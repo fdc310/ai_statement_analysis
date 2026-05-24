@@ -510,6 +510,27 @@ class VoiceChatRequest(BaseModel):
     message_id: Optional[str] = Field(None, description="消息ID，不传则自动生成UUID")
 
 
+class VoiceTextChatRequest(BaseModel):
+    """Request model for text-only scene chat conversation."""
+
+    text: str = Field(..., min_length=1, description="用户输入文本")
+    session_id: Optional[str] = Field(
+        None, description="会话ID，不传则创建新会话。传入则复用服务端存储的对话历史"
+    )
+    messages: Optional[List[ChatMessage]] = Field(
+        None, description="兼容旧模式的对话历史，仅在服务端会话无历史时使用"
+    )
+    system_prompt: Optional[str] = Field(
+        None, description="自定义系统提示词，优先级高于scene预设场景"
+    )
+    scene: Optional[str] = Field(
+        None, description="预设场景：interview/daily/customer_service"
+    )
+    voice_type: int = Field(default=101001, description="TTS音色ID")
+    enable_tts: bool = Field(default=True, description="是否生成AI回复的TTS音频")
+    message_id: Optional[str] = Field(None, description="消息ID，不传则自动生成UUID")
+
+
 class VoiceChatResponse(BaseModel):
     """Response model for voice chat conversation."""
 

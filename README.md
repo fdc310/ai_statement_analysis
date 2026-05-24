@@ -123,6 +123,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 | `/story-reading` | POST | 故事朗读评价（ASR + AI） |
 | `/tongue-twister-reading` | POST | 文章/绕口令朗读评价（ASR + SOE + AI） |
 | `/voice-chat` | POST | 语音对话（传统/多模态 + 服务端会话管理） |
+| `/voice-chat/text` | POST | 文本情景对话（无需语音 + 服务端会话管理） |
 | `/voice-chat/scene` | POST | 会话级场景切换 |
 | `/opinion-statement` | POST | 一分钟陈述评价（5 维度评分） |
 | `/impromptu-reaction` | POST | 即兴反应评价（5 维度评分） |
@@ -241,6 +242,12 @@ curl -X POST /api/v1/evaluation/voice-chat \
   -H "X-Signature: {encrypted_signature}" \
   -F "audio_url=https://example.com/user-speech-2.mp3" \
   -F "session_id={session_id_from_response}"
+
+# 文本情景对话（无需语音）
+curl -X POST /api/v1/evaluation/voice-chat/text \
+  -H "X-Signature: {encrypted_signature}" \
+  -H "Content-Type: application/json" \
+  -d '{"text":"我想练习一下面试自我介绍。","scene":"interview","enable_tts":false}'
 
 # 切换场景
 curl -X POST /api/v1/evaluation/voice-chat/scene \

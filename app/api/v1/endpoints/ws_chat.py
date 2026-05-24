@@ -18,11 +18,12 @@ import re
 import base64
 import queue
 import threading
+import uuid
 from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 
-from app.services.streaming.session_manager import StreamingSession
+from app.services.streaming.session_manager import StreamResult, StreamingSession
 from app.schemas.streaming_chat import StreamChatConfig
 from app.core.config import settings
 from app.core.security import aes_service
@@ -68,6 +69,24 @@ class _ChatTTSListener(FlowingSpeechSynthesisListener):
         self._audio_queue.put(None)
 
 
+class _TextChatSession:
+    """Small adapter that lets text input reuse the existing chat pipeline."""
+
+    def __init__(self, text: str, session_id: Optional[str] = None):
+        self.session_id = session_id or str(uuid.uuid4())
+        self._text = text
+        self._finished = False
+
+    async def finish(self) -> StreamResult:
+        if self._finished:
+            raise RuntimeError("Session already finished")
+        self._finished = True
+        return StreamResult(
+            session_id=self.session_id,
+            speech_text=self._text,
+        )
+
+
 @router.websocket("/ws/chat")
 async def websocket_streaming_chat(
     websocket: WebSocket,
@@ -104,6 +123,7 @@ async def websocket_streaming_chat(
 
     session: Optional[StreamingSession] = None
     config: Optional[StreamChatConfig] = None
+    text_stream_session_id: Optional[str] = None
 
     try:
         while True:
@@ -130,19 +150,25 @@ async def websocket_streaming_chat(
                                         pass
                                 return on_asr_partial
 
-                            on_asr_partial = await _make_on_asr_partial(websocket)
-                            session = StreamingSession(
-                                config=config,
-                                on_asr_partial=on_asr_partial,
-                                on_soe_intermediate=None,
-                            )
-                            await session.start()
+                            if config.enable_asr or config.enable_soe:
+                                on_asr_partial = await _make_on_asr_partial(websocket)
+                                session = StreamingSession(
+                                    config=config,
+                                    on_asr_partial=on_asr_partial,
+                                    on_soe_intermediate=None,
+                                )
+                                await session.start()
+                                started_session_id = session.session_id
+                                logger.info(f"WS chat session started: {session.session_id}")
+                            else:
+                                text_stream_session_id = str(uuid.uuid4())
+                                started_session_id = text_stream_session_id
+                                logger.info(f"WS text chat session prepared: {text_stream_session_id}")
 
                             await websocket.send_json({
                                 "type": "session_started",
-                                "session_id": session.session_id,
+                                "session_id": started_session_id,
                             })
-                            logger.info(f"WS chat session started: {session.session_id}")
 
                         elif msg_type == "end":
                             if not session:
@@ -153,6 +179,35 @@ async def websocket_streaming_chat(
                                 continue
 
                             await _handle_end(websocket, session, config)
+
+                        elif msg_type == "text":
+                            if config is None:
+                                config_data = data.get("config", data.get("data", {}).get("config", {}))
+                                config = StreamChatConfig(**config_data)
+                                config.enable_asr = False
+                                config.enable_soe = False
+                                text_stream_session_id = str(uuid.uuid4())
+
+                            payload = data.get("data", {})
+                            if isinstance(payload, dict):
+                                user_text = payload.get("text", "")
+                            else:
+                                user_text = data.get("text", "")
+                            user_text = str(user_text).strip()
+                            if not user_text:
+                                await websocket.send_json({
+                                    "type": "error",
+                                    "message": "text cannot be empty",
+                                })
+                                continue
+
+                            text_session = _TextChatSession(
+                                user_text,
+                                session_id=text_stream_session_id,
+                            )
+                            done_data = await _handle_end(websocket, text_session, config)
+                            if done_data and done_data.get("chat_session_id"):
+                                config.session_id = done_data["chat_session_id"]
 
                         else:
                             await websocket.send_json({
@@ -296,16 +351,17 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
     result = await session.finish()
 
     if not result.speech_text or not result.speech_text.strip():
+        done_data = {
+            "session_id": result.session_id,
+            "user_text": "",
+            "assistant_text": "",
+            "tts_url": None,
+        }
         await send_ws_json({
             "type": "chat_done",
-            "data": {
-                "session_id": result.session_id,
-                "user_text": "",
-                "assistant_text": "",
-                "tts_url": None,
-            },
+            "data": done_data,
         })
-        return
+        return done_data
 
     user_text = result.speech_text
 
@@ -550,3 +606,4 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
 
     await send_ws_json({"type": "chat_done", "data": done_data})
     logger.info(f"WS chat completed: {session.session_id}")
+    return done_data

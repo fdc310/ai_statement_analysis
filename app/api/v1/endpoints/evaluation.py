@@ -43,6 +43,7 @@ from app.schemas.evaluation import (
     TongueTwisterReadingRequest,
     TongueTwisterReadingResponse,
     VoiceChatRequest,
+    VoiceTextChatRequest,
     VoiceChatResponse,
     OpinionStatementRequest,
     OpinionStatementResponse,
@@ -2011,6 +2012,87 @@ async def voice_chat(
         return VoiceChatResponse(
             success=False,
             message="Chat failed",
+            message_id=msg_id,
+            error=str(e)
+        )
+
+
+@router.post("/voice-chat/text", response_model=VoiceChatResponse)
+async def voice_text_chat(
+    request: VoiceTextChatRequest,
+    x_signature: Optional[str] = Header(None, alias="X-Signature")
+) -> VoiceChatResponse:
+    """
+    Text-only scene chat endpoint.
+
+    This endpoint uses the same scene/session context as /voice-chat, but skips
+    ASR and accepts user text directly.
+    """
+    verify_signature(x_signature)
+
+    msg_id = request.message_id or str(uuid.uuid4())
+    user_text = request.text.strip()
+    if not user_text:
+        raise HTTPException(status_code=400, detail="text cannot be empty")
+
+    try:
+        session = await chat_session_manager.get_or_create_session(
+            session_id=request.session_id,
+            scene=request.scene,
+            system_prompt=request.system_prompt,
+            mode="text",
+            voice_type=request.voice_type,
+        )
+
+        history = list(session.messages)
+        if not history and request.messages:
+            history = [
+                {"role": item.role, "content": item.content}
+                for item in request.messages
+                if item.role and item.content
+            ]
+
+        messages = (
+            [{"role": "system", "content": session.system_prompt}]
+            + history
+            + [{"role": "user", "content": user_text}]
+        )
+
+        chat_result = await get_llm_service().chat(
+            messages,
+            temperature=0.7,
+        )
+        assistant_text = chat_result.get("content", "")
+
+        await chat_session_manager.append_message(session.session_id, "user", user_text)
+        await chat_session_manager.append_message(session.session_id, "assistant", assistant_text)
+
+        audio_base64 = None
+        if request.enable_tts and assistant_text:
+            audio_bytes = await tts_service.synthesize(
+                text=assistant_text,
+                voice_type=session.voice_type,
+                codec="mp3"
+            )
+            audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
+
+        return VoiceChatResponse(
+            success=True,
+            message="Text chat completed successfully",
+            message_id=msg_id,
+            session_id=session.session_id,
+            user_text=user_text,
+            assistant_text=assistant_text,
+            audio_base64=audio_base64,
+            asr_data=None,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        return VoiceChatResponse(
+            success=False,
+            message="Text chat failed",
             message_id=msg_id,
             error=str(e)
         )
