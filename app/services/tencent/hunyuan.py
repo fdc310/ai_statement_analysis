@@ -1286,9 +1286,13 @@ class HunyuanService(TencentCloudClient):
             },
             "content_relevance": {
                 "topic_relevance": "未知",
+                "is_mere_repetition": False,
+                "repetition_ratio": "0%",
+                "has_original_response": False,
                 "on_topic": False,
                 "topic_drift": False,
                 "off_topic_parts": [],
+                "content_depth": "未知",
                 "relevance_description": "无法解析AI响应",
                 "assessment": "无法解析AI响应"
             },
