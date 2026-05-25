@@ -2324,18 +2324,20 @@ async def generate_opinion_statement_report(
         )
 
         # 5. Calculate audio duration and speech rate
-        audio_duration = await get_audio_duration(audio_data)
+        real_audio_duration = await get_audio_duration(audio_data)
+        audio_duration = real_audio_duration
         if audio_duration is None and word_info_list:
             audio_duration = max(w.get("end_time", 0) for w in word_info_list) / 1000
         speech_rate = None
 
-        if audio_duration and audio_duration > 0 and speech_text:
+        # Only calculate speech rate with real audio duration (not word-timestamp fallback)
+        if real_audio_duration and real_audio_duration > 0 and speech_text:
             if request.language == "zh":
                 punctuation = string.punctuation + '。，！？、；：""''（）【】《》…—'
                 char_count = len([c for c in speech_text if c not in punctuation and not c.isspace()])
             else:
                 char_count = len(speech_text.split())
-            speech_rate = round(char_count / (audio_duration / 60), 1)
+            speech_rate = round(char_count / (real_audio_duration / 60), 1)
 
         # 6. Generate opinion statement report via Hunyuan
         evaluation_report = await hunyuan_service.generate_opinion_statement_report(
@@ -2545,18 +2547,20 @@ async def evaluate_impromptu_reaction(
         )
 
         # 5. Calculate audio duration and speech rate
-        audio_duration = await get_audio_duration(audio_data)
+        real_audio_duration = await get_audio_duration(audio_data)
+        audio_duration = real_audio_duration
         if audio_duration is None and word_info_list:
             audio_duration = max(w.get("end_time", 0) for w in word_info_list) / 1000
         speech_rate = None
 
-        if audio_duration and audio_duration > 0 and speech_text:
+        # Only calculate speech rate with real audio duration (not word-timestamp fallback)
+        if real_audio_duration and real_audio_duration > 0 and speech_text:
             if request.language == "zh":
                 punctuation = string.punctuation + '。，！？、；：""''（）【】《》…—'
                 char_count = len([c for c in speech_text if c not in punctuation and not c.isspace()])
             else:
                 char_count = len(speech_text.split())
-            speech_rate = round(char_count / (audio_duration / 60), 1)
+            speech_rate = round(char_count / (real_audio_duration / 60), 1)
 
         # 6. Generate impromptu reaction report via Hunyuan
         evaluation_report = await hunyuan_service.generate_impromptu_reaction_report(
