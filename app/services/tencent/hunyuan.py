@@ -23,6 +23,8 @@ from app.services.agents.prompts.evaluation import (
 from app.services.agents.prompts.tongue_twister import (
     tongue_twister_system_prompt,
     tongue_twister_user_prompt,
+    tongue_twister_reading_system_prompt,
+    tongue_twister_reading_user_prompt,
     article_reading_system_prompt,
     article_reading_user_prompt,
 )
@@ -1026,13 +1028,14 @@ class HunyuanService(TencentCloudClient):
                 language=language,
             )
         else:
-            system_prompt = tongue_twister_system_prompt()
-            user_prompt = tongue_twister_user_prompt(
+            system_prompt = tongue_twister_reading_system_prompt()
+            user_prompt = tongue_twister_reading_user_prompt(
                 speech_text=speech_text,
                 reference_text=tongue_twister_text,
                 speech_scores=scores_data,
-                word_info_list=word_info_list,
                 low_score_words=low_score_words,
+                statistics=statistics_data,
+                word_info_list=word_info_list,
                 language=language,
             )
 

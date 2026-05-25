@@ -25,6 +25,8 @@ from app.services.agents.prompts.story_reading import (
 from app.services.agents.prompts.tongue_twister import (
     tongue_twister_system_prompt,
     tongue_twister_user_prompt,
+    tongue_twister_reading_system_prompt,
+    tongue_twister_reading_user_prompt,
     article_reading_system_prompt,
     article_reading_user_prompt,
 )
@@ -119,8 +121,8 @@ class ReportAgent(BaseAgent):
             return impromptu_reaction_system_prompt(language=language, has_scenario=has_topic)
         elif eval_type == "story_reading":
             return story_reading_system_prompt()
-        elif eval_type == "tongue_twister":
-            return tongue_twister_system_prompt()
+        elif eval_type in {"tongue_twister", "tongue_twister_reading"}:
+            return tongue_twister_reading_system_prompt()
         elif eval_type == "article_reading":
             return article_reading_system_prompt()
         elif report_format == "json":
@@ -171,13 +173,14 @@ class ReportAgent(BaseAgent):
                 audio_duration=context.audio_duration,
                 language=context.language,
             )
-        elif eval_type == "tongue_twister":
-            return tongue_twister_user_prompt(
+        elif eval_type in {"tongue_twister", "tongue_twister_reading"}:
+            return tongue_twister_reading_user_prompt(
                 speech_text=context.speech_text or "",
                 reference_text=context.request.get("reference_text"),
                 speech_scores=context.scores_data,
-                word_info_list=context.word_info_list,
                 low_score_words=context.low_score_words,
+                statistics=context.statistics_data,
+                word_info_list=context.word_info_list,
                 language=context.language,
             )
         elif eval_type == "article_reading":

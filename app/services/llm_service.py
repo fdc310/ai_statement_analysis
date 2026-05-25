@@ -18,6 +18,8 @@ from app.services.agents.prompts.evaluation import (
 from app.services.agents.prompts.tongue_twister import (
     tongue_twister_system_prompt,
     tongue_twister_user_prompt,
+    tongue_twister_reading_system_prompt,
+    tongue_twister_reading_user_prompt,
     article_reading_system_prompt,
     article_reading_user_prompt,
 )
@@ -490,12 +492,12 @@ class LLMService:
         self,
         text: str,
         language: str = "zh"
-    ) -> dict:
+    ) -> str:
         """Analyze tongue twister pronunciation."""
         system_prompt = tongue_twister_system_prompt()
         user_prompt = tongue_twister_user_prompt(
             speech_text=text,
-            language="zh",
+            language=language,
         )
 
         messages = [
@@ -504,9 +506,7 @@ class LLMService:
         ]
 
         result = await self.chat(messages, temperature=0.3)
-        content = result["content"]
-        report_data = extract_json(content)
-        return report_data or {"raw_report": content}
+        return result["content"]
 
     async def analyze_sentence_interpretation(
         self,
@@ -581,14 +581,15 @@ class LLMService:
                 language="zh",
             )
         else:
-            system_prompt = tongue_twister_system_prompt()
-            user_prompt = tongue_twister_user_prompt(
+            system_prompt = tongue_twister_reading_system_prompt()
+            user_prompt = tongue_twister_reading_user_prompt(
                 speech_text=speech_text,
                 reference_text=tongue_twister_text,
                 speech_scores=scores_data,
-                word_info_list=word_info_list,
                 low_score_words=low_score_words,
-                language="zh",
+                statistics=statistics_data,
+                word_info_list=word_info_list,
+                language=language,
             )
 
         messages = [
