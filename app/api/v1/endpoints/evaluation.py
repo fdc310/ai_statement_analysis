@@ -51,9 +51,9 @@ from app.schemas.evaluation import (
     ImpromptuReactionResponse
 )
 from app.services.tencent import asr_service, soe_service, tts_service
+from app.services.tencent.hunyuan import hunyuan_service
 from app.services.tencent.audio import get_audio_duration
 from app.services.chat.session_manager import chat_session_manager
-from app.services import get_llm_service
 
 router = APIRouter()
 
@@ -131,7 +131,7 @@ async def generate_report_task(
     """Background task to generate AI report and send callback."""
     try:
         # Generate AI evaluation report
-        evaluation_report = await get_llm_service().generate_evaluation(
+        evaluation_report = await hunyuan_service.generate_evaluation(
             speech_text,
             scores_data,
             custom_prompt,
@@ -744,7 +744,7 @@ async def generate_report(
         # 根据 report_type 生成不同格式的报告
         if request.report_type == ReportType.simple:
             # 简洁报告：语速评分 + 低分段落分析
-            evaluation_report = await get_llm_service().generate_simple_report_json(
+            evaluation_report = await hunyuan_service.generate_simple_report_json(
                 speech_text=speech_text,
                 speech_scores=scores_data,
                 low_score_words=low_score_words_data,
@@ -754,7 +754,7 @@ async def generate_report(
             )
         else:
             # 完整报告：语速 + 内容角度 + 逻辑与结构 + 表达与用词
-            evaluation_report = await get_llm_service().generate_full_report_json(
+            evaluation_report = await hunyuan_service.generate_full_report_json(
                 speech_text=speech_text,
                 speech_scores=scores_data,
                 low_score_words=low_score_words_data,
@@ -1017,7 +1017,7 @@ async def generate_report_upload(
         # 根据 report_type 生成不同格式的报告
         if report_type == "simple":
             # 简洁报告：语速评分 + 低分段落分析
-            evaluation_report = await get_llm_service().generate_simple_report_json(
+            evaluation_report = await hunyuan_service.generate_simple_report_json(
                 speech_text=text,
                 speech_scores=scores_data,
                 low_score_words=low_score_words_data,
@@ -1027,7 +1027,7 @@ async def generate_report_upload(
             )
         else:
             # 完整报告：语速 + 内容角度 + 逻辑与结构 + 表达与用词
-            evaluation_report = await get_llm_service().generate_full_report_json(
+            evaluation_report = await hunyuan_service.generate_full_report_json(
                 speech_text=text,
                 speech_scores=scores_data,
                 low_score_words=low_score_words_data,
@@ -1166,7 +1166,7 @@ async def analyze_text_structure(
     msg_id = request.message_id or str(uuid.uuid4())
 
     try:
-        analysis_result = await get_llm_service().analyze_text_structure(
+        analysis_result = await hunyuan_service.analyze_text_structure(
             text=request.text,
             custom_prompt=request.custom_prompt
         )
@@ -1372,7 +1372,7 @@ async def analyze_tongue_twister(
     msg_id = request.message_id or str(uuid.uuid4())
 
     try:
-        analysis_result = await get_llm_service().analyze_tongue_twister(
+        analysis_result = await hunyuan_service.analyze_tongue_twister(
             text=request.text,
             language=request.language
         )
@@ -1461,7 +1461,7 @@ async def analyze_sentence_interpretation(
     msg_id = request.message_id or str(uuid.uuid4())
 
     try:
-        analysis_result = await get_llm_service().analyze_sentence_interpretation(
+        analysis_result = await hunyuan_service.analyze_sentence_interpretation(
             text=request.text,
             custom_prompt=request.custom_prompt
         )
@@ -1656,7 +1656,7 @@ async def analyze_story_reading(
             audio_duration = max(w.get("end_time", 0) for w in word_info_list) / 1000
 
         # Analyze story reading with Hunyuan
-        analysis_result = await get_llm_service().analyze_story_reading(
+        analysis_result = await hunyuan_service.analyze_story_reading(
             speech_text=speech_text,
             story_text=request.story_text,
             word_info_list=word_info_list,
@@ -1825,7 +1825,7 @@ async def evaluate_tongue_twister_reading(
         )
 
         # Call Hunyuan for AI analysis
-        analysis_result = await get_llm_service().analyze_tongue_twister_reading(
+        analysis_result = await hunyuan_service.analyze_tongue_twister_reading(
             speech_text=speech_text,
             tongue_twister_text=request.tongue_twister_text,
             word_info_list=word_info_list,
@@ -1948,7 +1948,7 @@ async def voice_chat(
 
         if session.mode == "multimodal":
             # Multimodal mode: send audio directly to model
-            chat_result = await get_llm_service().chat_multimodal(
+            chat_result = await hunyuan_service.chat_multimodal(
                 audio_url=audio_url,
                 messages=session.messages,
                 system_prompt=session.system_prompt,
@@ -1975,7 +1975,7 @@ async def voice_chat(
 
             # Build messages for LLM
             hunyuan_messages = [{"role": "user", "content": user_text}]
-            chat_result = await get_llm_service().chat(
+            chat_result = await hunyuan_service.chat(
                 [{"role": "system", "content": session.system_prompt}] + session.messages + hunyuan_messages,
                 temperature=0.7,
             )
@@ -2058,7 +2058,7 @@ async def voice_text_chat(
             + [{"role": "user", "content": user_text}]
         )
 
-        chat_result = await get_llm_service().chat(
+        chat_result = await hunyuan_service.chat(
             messages,
             temperature=0.7,
         )
@@ -2338,7 +2338,7 @@ async def generate_opinion_statement_report(
             speech_rate = round(char_count / (audio_duration / 60), 1)
 
         # 6. Generate opinion statement report via Hunyuan
-        evaluation_report = await get_llm_service().generate_opinion_statement_report(
+        evaluation_report = await hunyuan_service.generate_opinion_statement_report(
             speech_text=speech_text,
             speech_scores=scores_data,
             low_score_words=low_score_words_data,
@@ -2559,7 +2559,7 @@ async def evaluate_impromptu_reaction(
             speech_rate = round(char_count / (audio_duration / 60), 1)
 
         # 6. Generate impromptu reaction report via Hunyuan
-        evaluation_report = await get_llm_service().generate_impromptu_reaction_report(
+        evaluation_report = await hunyuan_service.generate_impromptu_reaction_report(
             speech_text=speech_text,
             speech_scores=scores_data,
             low_score_words=low_score_words_data,

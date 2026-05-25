@@ -114,8 +114,8 @@ class EvaluationCallbackData(BaseModel):
     message: str = Field(..., description="Status message")
 
     # AI Report (sent via callback)
-    evaluation_report: Optional[dict] = Field(
-        None, description="AI-generated evaluation report in JSON format"
+    evaluation_report: Optional[str] = Field(
+        None, description="AI-generated evaluation report in Markdown format"
     )
 
     # Error info
@@ -144,8 +144,8 @@ class EvaluationResponse(BaseModel):
     low_score_words: Optional[List[WordScore]] = Field(
         None, description="Words with low pronunciation scores"
     )
-    evaluation_report: Optional[dict] = Field(
-        None, description="AI-generated evaluation report in JSON format"
+    evaluation_report: Optional[str] = Field(
+        None, description="AI-generated evaluation report in Markdown format"
     )
 
     # Error info
