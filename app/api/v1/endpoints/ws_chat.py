@@ -129,6 +129,10 @@ async def websocket_streaming_chat(
         while True:
             message = await websocket.receive()
 
+            if message["type"] == "websocket.disconnect":
+                logger.info("WS chat client disconnected")
+                break
+
             if message["type"] == "websocket.receive":
                 if "text" in message:
                     try:
