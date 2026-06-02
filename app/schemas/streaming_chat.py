@@ -25,3 +25,4 @@ class StreamChatConfig(BaseModel):
     enable_tts: bool = True  # 是否生成TTS语音
     enable_blood_bar: bool = False  # 是否启用血条机制
     initial_hp: int = 100  # 初始血量
+    sub_type: str = ""  # 场景子类型，如 campus/social/civil/report/promotion/resignation/sales/deal/networking

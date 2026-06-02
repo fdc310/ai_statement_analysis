@@ -25,6 +25,12 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 
 from app.services.streaming.session_manager import StreamResult, StreamingSession
 from app.schemas.streaming_chat import StreamChatConfig
+from app.services.agents.prompts.scenario_report import (
+    scenario_summary_system_prompt,
+    scenario_summary_user_prompt,
+    scenario_report_system_prompt,
+    scenario_report_user_prompt,
+)
 from app.core.config import settings
 from app.core.security import aes_service
 from app.core.sdk_path import SDK_PATH  # noqa: F401 — ensures SDK is on sys.path
@@ -124,6 +130,7 @@ async def websocket_streaming_chat(
     session: Optional[StreamingSession] = None
     config: Optional[StreamChatConfig] = None
     text_stream_session_id: Optional[str] = None
+    chat_session_id: Optional[str] = None  # Track current chat session for end_dialogue
 
     try:
         while True:
@@ -182,7 +189,9 @@ async def websocket_streaming_chat(
                                 })
                                 continue
 
-                            await _handle_end(websocket, session, config)
+                            done_data = await _handle_end(websocket, session, config)
+                            if done_data and done_data.get("chat_session_id"):
+                                chat_session_id = done_data["chat_session_id"]
 
                         elif msg_type == "text":
                             if config is None:
@@ -212,6 +221,49 @@ async def websocket_streaming_chat(
                             done_data = await _handle_end(websocket, text_session, config)
                             if done_data and done_data.get("chat_session_id"):
                                 config.session_id = done_data["chat_session_id"]
+                                chat_session_id = done_data["chat_session_id"]
+
+                        elif msg_type == "end_dialogue":
+                            # Manual end: generate report and close dialogue
+                            if not chat_session_id:
+                                await websocket.send_json({
+                                    "type": "error",
+                                    "message": "No active chat session to end",
+                                })
+                                continue
+
+                            from app.services.chat.session_manager import (
+                                chat_session_manager as _csm,
+                            )
+                            from app.services import get_llm_service as _get_llm
+
+                            _chat_sess = await _csm.get_session(chat_session_id)
+                            if not _chat_sess:
+                                await websocket.send_json({
+                                    "type": "error",
+                                    "message": "Chat session not found or expired",
+                                })
+                                continue
+
+                            _llm = _get_llm()
+                            _scene = config.scene if config else ""
+                            _sub_type = config.sub_type if config else ""
+                            _report_scene = f"{_scene}:{_sub_type}" if _sub_type else _scene
+                            _report = await _generate_dialogue_report(
+                                _llm, _chat_sess, _report_scene,
+                            )
+                            if _report:
+                                await _csm.end_session(chat_session_id, _report)
+
+                            await websocket.send_json({
+                                "type": "dialogue_ended",
+                                "data": {
+                                    "chat_session_id": chat_session_id,
+                                    "summary": _report.get("summary", "") if _report else "",
+                                    "report": _report.get("detail", {}) if _report else {},
+                                },
+                            })
+                            logger.info(f"Dialogue manually ended: {chat_session_id}")
 
                         else:
                             await websocket.send_json({
@@ -335,6 +387,77 @@ async def _evaluate_blood_bar(
         return None
 
 
+async def _generate_dialogue_report(
+    llm_service,
+    chat_sess,
+    scene: str,
+    status_callback=None,
+) -> Optional[dict]:
+    """Generate short summary + full report for a completed dialogue session."""
+    try:
+        from app.services.agents.prompts.common import extract_json
+
+        messages = chat_sess.messages or []
+        blood_history = chat_sess.blood_history or []
+        initial_hp = 100
+        final_hp = chat_sess.hp
+
+        # ── Step 1: Generate short summary ──
+        summary_sys = scenario_summary_system_prompt()
+        summary_user = scenario_summary_user_prompt(
+            scene=scene,
+            messages=messages,
+            blood_history=blood_history,
+            final_hp=final_hp,
+            initial_hp=initial_hp,
+        )
+        summary_result = await llm_service.chat(
+            [
+                {"role": "system", "content": summary_sys},
+                {"role": "user", "content": summary_user},
+            ],
+            temperature=0.3,
+            status_callback=status_callback,
+        )
+        summary_content = summary_result.get("content", "").strip()
+        summary_parsed = extract_json(summary_content)
+        short_summary = summary_parsed.get("summary", "") if summary_parsed else ""
+        if not short_summary:
+            # Fallback: extract from raw content
+            short_summary = summary_content[:50]
+
+        # ── Step 2: Generate full report ──
+        report_sys = scenario_report_system_prompt(scene)
+        report_user = scenario_report_user_prompt(
+            scene=scene,
+            messages=messages,
+            blood_history=blood_history,
+            final_hp=final_hp,
+            initial_hp=initial_hp,
+        )
+        report_result = await llm_service.chat(
+            [
+                {"role": "system", "content": report_sys},
+                {"role": "user", "content": report_user},
+            ],
+            temperature=0.3,
+            status_callback=status_callback,
+        )
+        report_content = report_result.get("content", "").strip()
+        report_data = extract_json(report_content)
+        if not report_data:
+            report_data = {"raw_report": report_content}
+
+        return {
+            "summary": short_summary,
+            "detail": report_data,
+        }
+
+    except Exception as e:
+        logger.error(f"Dialogue report generation error: {e}", exc_info=True)
+        return None
+
+
 async def _handle_end(websocket: WebSocket, session: StreamingSession, config: StreamChatConfig):
     """Handle 'end' message: ASR -> parallel LLM + persistent TTS -> chat_done."""
     ws_send_lock = asyncio.Lock()
@@ -378,9 +501,15 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
     from app.services import get_llm_service
 
     scene = config.scene or ""
+    sub_type = config.sub_type or ""
     system_prompt = config.system_prompt or ""
     if not system_prompt:
-        system_prompt = VOICE_CHAT_SCENE_PROMPTS.get(scene, DEFAULT_VOICE_CHAT_PROMPT)
+        # Try scene:sub_type first, then scene, then default
+        composite_key = f"{scene}:{sub_type}" if sub_type else scene
+        system_prompt = VOICE_CHAT_SCENE_PROMPTS.get(
+            composite_key,
+            VOICE_CHAT_SCENE_PROMPTS.get(scene, DEFAULT_VOICE_CHAT_PROMPT),
+        )
 
     chat_sess = await chat_session_manager.get_or_create_session(
         session_id=config.session_id,
@@ -598,6 +727,26 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
         except Exception as e:
             logger.error(f"TTS upload error: {e}")
 
+    # ── Phase 5b: generate report on game_over ───────────────────────────
+    report_data = None
+    if blood_bar_data and blood_bar_data.get("game_over"):
+        await send_ai_status({
+            "stage": "report",
+            "message": "Generating dialogue report",
+        })
+        # Refresh session to get latest messages
+        chat_sess = await chat_session_manager.get_session(chat_sess.session_id)
+        if chat_sess:
+            report_scene_key = f"{scene}:{sub_type}" if sub_type else scene
+            report_data = await _generate_dialogue_report(
+                llm, chat_sess, report_scene_key,
+                status_callback=send_ai_status,
+            )
+            if report_data:
+                await chat_session_manager.end_session(
+                    chat_sess.session_id, report_data
+                )
+
     done_data = {
         "session_id": result.session_id,
         "chat_session_id": chat_sess.session_id,
@@ -607,6 +756,8 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
     }
     if blood_bar_data:
         done_data["blood_bar"] = blood_bar_data
+    if report_data:
+        done_data["report"] = report_data
 
     await send_ws_json({"type": "chat_done", "data": done_data})
     logger.info(f"WS chat completed: {session.session_id}")
