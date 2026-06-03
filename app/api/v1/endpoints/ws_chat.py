@@ -261,6 +261,7 @@ async def websocket_streaming_chat(
                                     "chat_session_id": chat_session_id,
                                     "summary": _report.get("summary", "") if _report else "",
                                     "report": _report.get("detail", {}) if _report else {},
+                                    "duration": _report.get("duration") if _report else None,
                                 },
                             })
                             logger.info(f"Dialogue manually ended: {chat_session_id}")
@@ -394,6 +395,7 @@ async def _generate_dialogue_report(
     status_callback=None,
 ) -> Optional[dict]:
     """Generate short summary + full report for a completed dialogue session."""
+    import time
     try:
         from app.services.agents.prompts.common import extract_json
 
@@ -402,7 +404,10 @@ async def _generate_dialogue_report(
         initial_hp = 100
         final_hp = chat_sess.hp
 
+        total_start = time.time()
+
         # ── Step 1: Generate short summary ──
+        step1_start = time.time()
         summary_sys = scenario_summary_system_prompt()
         summary_user = scenario_summary_user_prompt(
             scene=scene,
@@ -419,14 +424,17 @@ async def _generate_dialogue_report(
             temperature=0.3,
             status_callback=status_callback,
         )
+        step1_elapsed = round(time.time() - step1_start, 2)
         summary_content = summary_result.get("content", "").strip()
         summary_parsed = extract_json(summary_content)
         short_summary = summary_parsed.get("summary", "") if summary_parsed else ""
         if not short_summary:
             # Fallback: extract from raw content
             short_summary = summary_content[:50]
+        logger.info(f"Report step1 (summary) completed in {step1_elapsed}s")
 
         # ── Step 2: Generate full report ──
+        step2_start = time.time()
         report_sys = scenario_report_system_prompt(scene)
         report_user = scenario_report_user_prompt(
             scene=scene,
@@ -443,14 +451,26 @@ async def _generate_dialogue_report(
             temperature=0.3,
             status_callback=status_callback,
         )
+        step2_elapsed = round(time.time() - step2_start, 2)
         report_content = report_result.get("content", "").strip()
         report_data = extract_json(report_content)
         if not report_data:
             report_data = {"raw_report": report_content}
 
+        total_elapsed = round(time.time() - total_start, 2)
+        logger.info(
+            f"Report generation completed in {total_elapsed}s "
+            f"(summary={step1_elapsed}s, report={step2_elapsed}s)"
+        )
+
         return {
             "summary": short_summary,
             "detail": report_data,
+            "duration": {
+                "total": total_elapsed,
+                "summary": step1_elapsed,
+                "report": step2_elapsed,
+            },
         }
 
     except Exception as e:
