@@ -312,23 +312,78 @@ async def websocket_streaming_chat(
 
 
 _BLOOD_BAR_SCENE_CRITERIA = {
-    "interview": "面试场景：回答是否专业、有条理、切题，是否展现了良好的表达能力和逻辑思维",
-    "daily": "日常对话场景：回答是否自然流畅、有互动感，是否像正常的日常聊天",
-    "customer_service": "客服场景：回答是否礼貌、有耐心，是否有效回应了客服的需求和问题",
+    "interview": "求职面试场景（应届/社招/考公考编）",
+    "interview:campus": "应届求职面试场景",
+    "interview:social": "社会招聘面试场景",
+    "interview:civil": "考公考编结构化面试场景",
+    "office_work": "职场办公场景（工作汇报/升职加薪/离职跳槽）",
+    "office_work:report": "工作汇报场景",
+    "office_work:promotion": "升职加薪沟通场景",
+    "office_work:resignation": "离职跳槽沟通场景",
+    "business_social": "商务社交场景（销售/洽谈/社交）",
+    "business_social:sales": "销售沟通场景",
+    "business_social:deal": "商务洽谈场景",
+    "business_social:networking": "商务社交破冰场景",
+    "custom": "自定义对话场景",
+    "daily": "日常对话场景",
+    "customer_service": "客服场景",
 }
 
-_BLOOD_BAR_SYSTEM_PROMPT = """你是一位情景对话裁判。你的任务是判断用户在当前情景对话中的回答质量。
+_BLOOD_BAR_SYSTEM_PROMPT = """你是一位情景对话裁判。你的任务是判断用户在当前情景对话中的回答质量，决定血量变化。
 
-评判标准：{criteria}
+当前场景：{criteria}
 
-请根据用户的回答内容，判断其在当前情景下的表现，给出一个血量变化值（delta）。
-- 回答切题、质量好：加血 +5 到 +20
-- 回答一般、勉强合格：不加不减 0
-- 回答偏离主题、质量差：扣血 -5 到 -15
-- 回答完全跑题或无意义：扣血 -15 到 -30
+═══════════════════════════════════════
+扣血规则（总血量100）
+═══════════════════════════════════════
+
+【第一层：轻微失误 -5】表达能力问题
+- 说话啰嗦、绕圈子、废话多
+- 重点不明确，说了一大段没有结论
+- 口头禅过多（然后、那个、就是、嗯...连续出现）
+- 回答过短，信息不足（如领导问原因，只回"有点问题"）
+
+【第二层：中度失误 -10】沟通效果变差
+- 答非所问，未正面回应问题
+- 逻辑混乱，前后矛盾
+- 情绪化表达（如"这又不是我的问题"）
+- 频繁冷场，5秒以上不知道怎么接，或连续多次说"不知道"
+
+【第三层：重度失误 -20】现实里已经翻车
+- 汇报没有结论，问建议说"我也不太清楚"
+- 面试暴露致命问题（如离职原因说"领导太傻了"）
+- 顶撞沟通对象（如领导问为什么没完成，反问"你怎么不早点说"）
+- 关键问题回避，领导连续追问一直绕圈
+
+【第四层：致命失误 -999】直接结束对话
+- 面试场景：暴露严重职业道德问题、侮辱面试官
+- 工作汇报：承认关键数据没看、完全不准备
+- 客户谈判：威胁客户、态度恶劣（"不买就算了"）
+- 商务社交：严重失礼、触碰底线
+
+═══════════════════════════════════════
+加分规则
+═══════════════════════════════════════
+
+【表现优秀 +5~+15】
+- 回答切题、有条理、有深度
+- 主动挖掘需求、体现思考
+- 话术得体、展现专业素养
+
+【表现极佳 +20】
+- 超出预期的精彩回答
+- 化解刁难问题、展现高情商
+
+═══════════════════════════════════════
+返回格式
+═══════════════════════════════════════
 
 你必须严格返回以下JSON格式，不要返回任何其他内容：
-{{"delta": <整数>, "reason": "<简短中文说明，15字以内>"}}"""
+{{"delta": <整数>, "reason": "<简短中文说明，15字以内>", "fatal": <true或false>}}
+
+- delta：血量变化值，范围 -999 到 +20
+- reason：简短说明扣血/加血原因
+- fatal：是否为致命失误（true=直接结束对话，false=正常继续）"""
 
 
 async def _evaluate_blood_bar(
@@ -372,16 +427,23 @@ async def _evaluate_blood_bar(
 
         parsed = json.loads(content)
         delta = int(parsed.get("delta", 0))
-        # Clamp delta to reasonable range
-        delta = max(-30, min(20, delta))
         reason = str(parsed.get("reason", ""))[:50]
+        is_fatal = bool(parsed.get("fatal", False))
 
-        new_hp = max(0, current_hp + delta)
+        # Handle fatal: directly end or halve HP
+        if is_fatal:
+            new_hp = 0
+            delta = -current_hp  # drain all remaining HP
+        else:
+            # Clamp normal delta to [-20, +20]
+            delta = max(-20, min(20, delta))
+            new_hp = max(0, current_hp + delta)
         return {
             "hp": new_hp,
             "delta": delta,
             "reason": reason,
             "game_over": new_hp <= 0,
+            "fatal": is_fatal,
         }
     except Exception as e:
         logger.error(f"Blood bar evaluation error: {e}")
@@ -716,8 +778,9 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
     # ── Phase 4: blood bar evaluation ────────────────────────────────────
     blood_bar_data = None
     if config.enable_blood_bar and chat_sess.enable_blood_bar:
+        blood_scene_key = f"{scene}:{sub_type}" if sub_type else scene
         blood_bar_data = await _evaluate_blood_bar(
-            llm, scene, user_text, assistant_text, chat_sess.hp,
+            llm, blood_scene_key, user_text, assistant_text, chat_sess.hp,
             status_callback=send_ai_status,
         )
         if blood_bar_data:
