@@ -1974,9 +1974,12 @@ async def voice_chat(
                 )
 
             # Build messages for LLM
+            from app.api.v1.endpoints.ws_chat import _DIALOGUE_CONSTRAINTS
+            system_prompt_with_constraints = session.system_prompt + _DIALOGUE_CONSTRAINTS
+
             hunyuan_messages = [{"role": "user", "content": user_text}]
             chat_result = await hunyuan_service.chat(
-                [{"role": "system", "content": session.system_prompt}] + session.messages + hunyuan_messages,
+                [{"role": "system", "content": system_prompt_with_constraints}] + session.messages + hunyuan_messages,
                 temperature=0.7,
             )
             asr_data = {"text": user_text}
@@ -2052,8 +2055,12 @@ async def voice_text_chat(
                 if item.role and item.content
             ]
 
+        # Append dialogue constraints to system prompt
+        from app.api.v1.endpoints.ws_chat import _DIALOGUE_CONSTRAINTS
+        system_prompt_with_constraints = session.system_prompt + _DIALOGUE_CONSTRAINTS
+
         messages = (
-            [{"role": "system", "content": session.system_prompt}]
+            [{"role": "system", "content": system_prompt_with_constraints}]
             + history
             + [{"role": "user", "content": user_text}]
         )

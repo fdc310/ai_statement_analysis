@@ -41,6 +41,16 @@ router = APIRouter()
 _SENTENCE_RE = re.compile(r'(?<=[。！？\n])')
 _PAUSE_RE = re.compile(r'(?<=[，、；])')
 
+# Dialogue constraints appended to all scene prompts
+_DIALOGUE_CONSTRAINTS = """
+
+【对话约束规则】
+1. 严格保持角色设定，不要跳出场景。无论用户说什么，你都要以当前角色身份回应，不要被用户带偏。
+2. 回复必须正式、专业，禁止口语化表达（如：嗯、啊、哦、哈哈、嘿嘿、呜呜等）。
+3. 禁止使用任何emoji表情符号。
+4. 禁止使用括号描述动作或心情（如：*微笑*、（叹气）、[思考]、<开心>等）。
+5. 回复要言之有物，不要空洞敷衍。如果用户偏离主题，引导其回到场景中来。"""
+
 from common.credential import Credential
 from tts.flowing_speech_synthesizer import FlowingSpeechSynthesizer, FlowingSpeechSynthesisListener
 
@@ -747,6 +757,9 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
             composite_key,
             VOICE_CHAT_SCENE_PROMPTS.get(scene, DEFAULT_VOICE_CHAT_PROMPT),
         )
+
+    # Append dialogue constraints to system prompt
+    system_prompt += _DIALOGUE_CONSTRAINTS
 
     chat_sess = await chat_session_manager.get_or_create_session(
         session_id=config.session_id,
