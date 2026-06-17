@@ -15,9 +15,12 @@ ws[s]://<host>/api/v1/streaming/ws/chat?token=<signature>
 1. Connect to `/ws/chat`.
 2. Send `config` with `enable_asr=false` and `enable_soe=false`.
 3. Send a `text` message.
-4. Receive `llm_delta`, optional `tts_chunk`, and `chat_done`.
-5. Repeat step 3-4 for multi-turn dialogue.
-6. Dialogue ends either naturally (HP reaches 0) or manually (client sends `end_dialogue`).
+4. **If blood bar enabled**: Server evaluates user's answer and adjusts HP first.
+   - If HP reaches 0 (game_over): Skip LLM response, generate report directly.
+   - If HP > 0: Continue to step 5.
+5. Receive `llm_delta`, optional `tts_chunk`, and `chat_done`.
+6. Repeat step 3-5 for multi-turn dialogue.
+7. Dialogue ends either naturally (HP reaches 0) or manually (client sends `end_dialogue`).
 
 ## Config
 
@@ -139,6 +142,20 @@ For multi-turn context, pass the previous `chat_done.data.chat_session_id` back 
 
 When `enable_blood_bar=true`, the AI evaluates each user turn and adjusts HP.
 
+### Evaluation Timing
+
+**Important**: Blood bar evaluation happens **before** the LLM response.
+
+1. User sends text message
+2. Server evaluates user's answer quality (based on user text + conversation history)
+3. HP is updated
+4. If `game_over=true`: Skip LLM response, generate report immediately
+5. If `game_over=false`: Generate LLM response as normal
+
+This means:
+- On fatal mistakes, the dialogue ends immediately without an AI reply
+- The evaluation is based on the user's answer and previous context, not the current AI response
+
 ### Damage Tiers
 
 | Tier | Delta | Category | Examples |
@@ -193,6 +210,20 @@ The client can manually end the dialogue at any time. The server generates a ful
 When `enable_blood_bar=true` and HP reaches 0 (either through accumulated damage or a fatal hit), the server automatically generates a report. The report is included in the `chat_done` message of the turn that caused HP to reach 0.
 
 The `blood_bar.game_over` field will be `true`, and the `report` field will contain the evaluation.
+
+**Note**: When game_over occurs, the LLM response is skipped. The `assistant_text` in `chat_done` will be empty, and `tts_url` will be null.
+
+## Dialogue Constraints
+
+All AI responses in scene-based dialogues are automatically constrained with the following rules:
+
+1. **Role consistency**: AI strictly maintains its assigned role and won't be led off-topic by the user
+2. **Formal language**: No colloquial expressions (e.g., 嗯、啊、哦、哈哈、嘿嘿)
+3. **No emoji**: Emoji symbols are prohibited
+4. **No action/mood descriptions**: No bracketed actions or mood expressions (e.g., *微笑*、（叹气）、[思考]、<开心>)
+5. **Substantive responses**: Replies must be meaningful; if user goes off-topic, AI guides them back
+
+These constraints are automatically appended to the system prompt and apply to all scene types.
 
 ## Reply Hint
 
@@ -284,6 +315,17 @@ The `report.detail` object contains the full evaluation:
 ```
 
 The evaluation dimensions vary by scene type. See `app/services/agents/prompts/scenario_report.py` for the full dimension definitions per scene.
+
+### Scene-specific Dimensions
+
+| Scene | Sub-type | Dimensions |
+|-------|----------|------------|
+| `interview` | — | 对话亮点、岗位匹配度、问题应答质量、礼仪与职业形象、改进建议 |
+| `office_work` | `report` | 对话亮点、内容价值、职场情商与分寸、向上沟通适配度、改进建议 |
+| `office_work` | `promotion` | 对话亮点、诉求表达、职场情商与分寸、改进建议 |
+| `office_work` | `resignation` | 对话亮点、诉求表达、职场情商与分寸、改进建议 |
+| `business_social` | — | 对话亮点、需求挖掘能力、价值传递、谈判与博弈、商务礼仪、关系维护意识、改进建议 |
+| `custom` | — | 维度评分(说服力/共情力/应变力)、对话亮点、改进建议 |
 
 ## Report Duration
 

@@ -544,7 +544,6 @@ async def _evaluate_blood_bar(
     llm_service,
     scene: str,
     user_text: str,
-    assistant_text: str,
     current_hp: int,
     status_callback=None,
 ) -> Optional[dict]:
@@ -554,11 +553,11 @@ async def _evaluate_blood_bar(
     )
     system_prompt = _BLOOD_BAR_SYSTEM_PROMPT.format(criteria=criteria)
 
+    # Build user prompt - evaluate before AI response
     user_prompt = (
         f"当前情景：{scene or '通用对话'}\n"
         f"当前血量：{current_hp}/100\n"
-        f"用户的回答：{user_text}\n"
-        f"AI的回复：{assistant_text}"
+        f"用户的回答：{user_text}"
     )
 
     try:
@@ -916,39 +915,14 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
             except Exception as e:
                 logger.error(f"send_tts_chunks error: {e}")
 
-    # Start TTS thread only if enabled
-    tts_thread = None
-    tts_sender = None
-    if enable_tts:
-        tts_thread = threading.Thread(target=_tts_persistent_worker, daemon=True)
-        tts_thread.start()
-        tts_sender = asyncio.create_task(send_tts_chunks())
-
-    llm_task = asyncio.create_task(run_llm_stream())
-
-    try:
-        await llm_task
-        if tts_sender is not None:
-            await tts_sender
-    except asyncio.CancelledError:
-        if enable_tts:
-            tts_stop_event.set()
-            while not tts_text_queue.empty():
-                try:
-                    tts_text_queue.get_nowait()
-                except queue.Empty:
-                    break
-            tts_text_queue.put_nowait(None)
-        raise
-
-    assistant_text = "".join(llm_full_text)
-
-    # ── Phase 4: blood bar evaluation ────────────────────────────────────
+    # ── Phase 3: blood bar evaluation (BEFORE LLM response) ─────────────
     blood_bar_data = None
+    game_over = False
     if config.enable_blood_bar and chat_sess.enable_blood_bar:
         blood_scene_key = f"{scene}:{sub_type}" if sub_type else scene
+        # Evaluate based on user_text and conversation history (before AI response)
         blood_bar_data = await _evaluate_blood_bar(
-            llm, blood_scene_key, user_text, assistant_text, chat_sess.hp,
+            llm, blood_scene_key, user_text, chat_sess.hp,
             status_callback=send_ai_status,
         )
         if blood_bar_data:
@@ -957,32 +931,22 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
                 blood_bar_data["delta"],
                 blood_bar_data.get("reason", ""),
             )
+            game_over = blood_bar_data.get("game_over", False)
 
-    # ── Phase 5: update session, upload audio ────────────────────────────
-    await chat_session_manager.append_message(chat_sess.session_id, "user", user_text)
-    await chat_session_manager.append_message(chat_sess.session_id, "assistant", assistant_text)
-
+    # ── Phase 4: LLM stream + optional TTS (skip if game_over) ─────────
+    assistant_text = ""
     tts_url = None
-    if enable_tts and tts_collected_chunks and not tts_error_holder:
-        try:
-            from app.services.s3_storage import s3_storage
-            full_audio = b"".join(tts_collected_chunks)
-            upload_result = s3_storage.upload_tts_audio(
-                audio_data=full_audio,
-                codec="mp3",
-                text=assistant_text,
-                subfolder="tts",
-            )
-            if upload_result.get("success"):
-                tts_url = upload_result.get("url")
-        except Exception as e:
-            logger.error(f"TTS upload error: {e}")
-
-    # ── Phase 5b: generate summary + report on game_over ──────────────────
     summary_data = None
     report_data = None
-    if blood_bar_data and blood_bar_data.get("game_over"):
-        # Refresh session to get latest messages
+
+    if game_over:
+        # Game over: skip LLM, go straight to report generation
+        logger.info("Game over detected, skipping LLM response")
+
+        # Update session with user message only
+        await chat_session_manager.append_message(chat_sess.session_id, "user", user_text)
+
+        # Generate summary + report
         chat_sess = await chat_session_manager.get_session(chat_sess.session_id)
         if chat_sess:
             report_scene_key = f"{scene}:{sub_type}" if sub_type else scene
@@ -1018,6 +982,53 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
                 await chat_session_manager.end_session(
                     chat_sess.session_id, report_data
                 )
+    else:
+        # Not game over: generate LLM response
+        # Start TTS thread only if enabled
+        tts_thread = None
+        tts_sender = None
+        if enable_tts:
+            tts_thread = threading.Thread(target=_tts_persistent_worker, daemon=True)
+            tts_thread.start()
+            tts_sender = asyncio.create_task(send_tts_chunks())
+
+        llm_task = asyncio.create_task(run_llm_stream())
+
+        try:
+            await llm_task
+            if tts_sender is not None:
+                await tts_sender
+        except asyncio.CancelledError:
+            if enable_tts:
+                tts_stop_event.set()
+                while not tts_text_queue.empty():
+                    try:
+                        tts_text_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                tts_text_queue.put_nowait(None)
+            raise
+
+        assistant_text = "".join(llm_full_text)
+
+        # ── Phase 5: update session, upload audio ────────────────────────
+        await chat_session_manager.append_message(chat_sess.session_id, "user", user_text)
+        await chat_session_manager.append_message(chat_sess.session_id, "assistant", assistant_text)
+
+        if enable_tts and tts_collected_chunks and not tts_error_holder:
+            try:
+                from app.services.s3_storage import s3_storage
+                full_audio = b"".join(tts_collected_chunks)
+                upload_result = s3_storage.upload_tts_audio(
+                    audio_data=full_audio,
+                    codec="mp3",
+                    text=assistant_text,
+                    subfolder="tts",
+                )
+                if upload_result.get("success"):
+                    tts_url = upload_result.get("url")
+            except Exception as e:
+                logger.error(f"TTS upload error: {e}")
 
     done_data = {
         "session_id": result.session_id,
