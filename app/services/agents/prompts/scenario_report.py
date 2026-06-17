@@ -31,6 +31,37 @@ SCENE_EVAL_DIMENSIONS = {
             "改进建议：针对问题给出可落地的话术/行为改进方案",
         ],
     },
+    "office_work:report": {
+        "name": "工作汇报",
+        "sub_types": [],
+        "dimensions": [
+            "对话亮点：发言条理、主次顺序、是否分点/抓重点、有无逻辑混乱、答非所问",
+            "内容价值（汇报重点）：数据/成果/问题/计划是否清晰，是否抓领导关注点，汇报详略是否得当",
+            "职场情商与分寸：说话尺度、立场站位，是否抱怨、情绪化，面对拒绝/质疑的沟通姿态",
+            "向上沟通适配度：话术是否适配上下级关系，是否懂得换位思考领导视角",
+            "改进建议：针对问题给出可落地的话术/行为改进方案",
+        ],
+    },
+    "office_work:promotion": {
+        "name": "升职加薪",
+        "sub_types": [],
+        "dimensions": [
+            "对话亮点：发言条理、主次顺序、是否分点/抓重点、有无逻辑混乱、答非所问",
+            "诉求表达（加薪/升职）：理由是否充分（业绩、价值、贡献），语气是否不卑不亢，诉求是否合理、表述委婉有度",
+            "职场情商与分寸：说话尺度、立场站位，是否抱怨、情绪化，面对拒绝/质疑的沟通姿态",
+            "改进建议：针对问题给出可落地的话术/行为改进方案",
+        ],
+    },
+    "office_work:resignation": {
+        "name": "离职跳槽",
+        "sub_types": [],
+        "dimensions": [
+            "对话亮点：发言条理、主次顺序、是否分点/抓重点、有无逻辑混乱、答非所问",
+            "诉求表达：理由是否充分，语气是否不卑不亢，诉求是否合理、表述委婉有度",
+            "职场情商与分寸：说话尺度、立场站位，是否抱怨、情绪化，面对拒绝/质疑的沟通姿态",
+            "改进建议：针对问题给出可落地的话术/行为改进方案",
+        ],
+    },
     "business_social": {
         "name": "商务社交",
         "sub_types": ["销售沟通", "商务洽谈", "商务社交"],
@@ -86,8 +117,19 @@ _DEFAULT_DIMENSIONS = {
 
 
 def _get_scene_config(scene: str) -> dict:
-    """Get scene configuration, falling back to default."""
-    return SCENE_EVAL_DIMENSIONS.get(scene, _DEFAULT_DIMENSIONS)
+    """Get scene configuration, falling back to parent scene then default.
+
+    Supports composite keys like 'office_work:report' — tries exact match first,
+    then parent scene 'office_work', then default.
+    """
+    # Try exact match first (e.g., "office_work:report")
+    if scene in SCENE_EVAL_DIMENSIONS:
+        return SCENE_EVAL_DIMENSIONS[scene]
+    # Try parent scene (e.g., "office_work" from "office_work:report")
+    parent = scene.split(":")[0] if ":" in scene else scene
+    if parent in SCENE_EVAL_DIMENSIONS:
+        return SCENE_EVAL_DIMENSIONS[parent]
+    return _DEFAULT_DIMENSIONS
 
 
 # ── Summary prompt (20-30 chars) ──────────────────────────────────────────
@@ -164,7 +206,7 @@ def scenario_report_system_prompt(scene: str) -> str:
 1. 分析要言简意赅，直击问题
 2. 对话亮点要具体引用用户原话
 3. 改进建议要可落地、可操作
-4. 更优话术示例要贴合{scene_name}场景
+4. 更优话术示例要贴合{scene_name}场景，符合该场景的专业话术
 5. 如果有血量变化记录，结合血量变化分析用户表现的起伏
 
 你必须严格返回以下JSON格式，不要返回任何其他内容：

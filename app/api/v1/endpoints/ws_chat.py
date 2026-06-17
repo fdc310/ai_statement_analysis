@@ -224,7 +224,7 @@ async def websocket_streaming_chat(
                                 chat_session_id = done_data["chat_session_id"]
 
                         elif msg_type == "end_dialogue":
-                            # Manual end: generate report and close dialogue
+                            # Manual end: generate summary + report and close dialogue
                             if not chat_session_id:
                                 await websocket.send_json({
                                     "type": "error",
@@ -249,6 +249,21 @@ async def websocket_streaming_chat(
                             _scene = config.scene if config else ""
                             _sub_type = config.sub_type if config else ""
                             _report_scene = f"{_scene}:{_sub_type}" if _sub_type else _scene
+
+                            # Step 1: Generate short summary first and send immediately
+                            _summary = await _generate_dialogue_summary(
+                                _llm, _chat_sess, _report_scene,
+                            )
+                            if _summary:
+                                await websocket.send_json({
+                                    "type": "summary_ready",
+                                    "data": {
+                                        "chat_session_id": chat_session_id,
+                                        "summary": _summary.get("summary", ""),
+                                    },
+                                })
+
+                            # Step 2: Generate full report
                             _report = await _generate_dialogue_report(
                                 _llm, _chat_sess, _report_scene,
                             )
@@ -259,9 +274,12 @@ async def websocket_streaming_chat(
                                 "type": "dialogue_ended",
                                 "data": {
                                     "chat_session_id": chat_session_id,
-                                    "summary": _report.get("summary", "") if _report else "",
+                                    "summary": _summary.get("summary", "") if _summary else "",
                                     "report": _report.get("detail", {}) if _report else {},
-                                    "duration": _report.get("duration") if _report else None,
+                                    "duration": {
+                                        "summary": _summary.get("duration") if _summary else None,
+                                        "report": _report.get("duration") if _report else None,
+                                    },
                                 },
                             })
                             logger.info(f"Dialogue manually ended: {chat_session_id}")
@@ -450,13 +468,13 @@ async def _evaluate_blood_bar(
         return None
 
 
-async def _generate_dialogue_report(
+async def _generate_dialogue_summary(
     llm_service,
     chat_sess,
     scene: str,
     status_callback=None,
 ) -> Optional[dict]:
-    """Generate short summary + full report for a completed dialogue session."""
+    """Generate short summary (20-30 chars) for a completed dialogue session."""
     import time
     try:
         from app.services.agents.prompts.common import extract_json
@@ -466,10 +484,7 @@ async def _generate_dialogue_report(
         initial_hp = 100
         final_hp = chat_sess.hp
 
-        total_start = time.time()
-
-        # ── Step 1: Generate short summary ──
-        step1_start = time.time()
+        step_start = time.time()
         summary_sys = scenario_summary_system_prompt()
         summary_user = scenario_summary_user_prompt(
             scene=scene,
@@ -486,17 +501,41 @@ async def _generate_dialogue_report(
             temperature=0.3,
             status_callback=status_callback,
         )
-        step1_elapsed = round(time.time() - step1_start, 2)
+        step_elapsed = round(time.time() - step_start, 2)
         summary_content = summary_result.get("content", "").strip()
         summary_parsed = extract_json(summary_content)
         short_summary = summary_parsed.get("summary", "") if summary_parsed else ""
         if not short_summary:
-            # Fallback: extract from raw content
             short_summary = summary_content[:50]
-        logger.info(f"Report step1 (summary) completed in {step1_elapsed}s")
+        logger.info(f"Summary generation completed in {step_elapsed}s")
 
-        # ── Step 2: Generate full report ──
-        step2_start = time.time()
+        return {
+            "summary": short_summary,
+            "duration": step_elapsed,
+        }
+
+    except Exception as e:
+        logger.error(f"Summary generation error: {e}", exc_info=True)
+        return None
+
+
+async def _generate_dialogue_report(
+    llm_service,
+    chat_sess,
+    scene: str,
+    status_callback=None,
+) -> Optional[dict]:
+    """Generate full evaluation report for a completed dialogue session."""
+    import time
+    try:
+        from app.services.agents.prompts.common import extract_json
+
+        messages = chat_sess.messages or []
+        blood_history = chat_sess.blood_history or []
+        initial_hp = 100
+        final_hp = chat_sess.hp
+
+        step_start = time.time()
         report_sys = scenario_report_system_prompt(scene)
         report_user = scenario_report_user_prompt(
             scene=scene,
@@ -513,26 +552,16 @@ async def _generate_dialogue_report(
             temperature=0.3,
             status_callback=status_callback,
         )
-        step2_elapsed = round(time.time() - step2_start, 2)
+        step_elapsed = round(time.time() - step_start, 2)
         report_content = report_result.get("content", "").strip()
         report_data = extract_json(report_content)
         if not report_data:
             report_data = {"raw_report": report_content}
-
-        total_elapsed = round(time.time() - total_start, 2)
-        logger.info(
-            f"Report generation completed in {total_elapsed}s "
-            f"(summary={step1_elapsed}s, report={step2_elapsed}s)"
-        )
+        logger.info(f"Report generation completed in {step_elapsed}s")
 
         return {
-            "summary": short_summary,
             "detail": report_data,
-            "duration": {
-                "total": total_elapsed,
-                "summary": step1_elapsed,
-                "report": step2_elapsed,
-            },
+            "duration": step_elapsed,
         }
 
     except Exception as e:
@@ -810,17 +839,38 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
         except Exception as e:
             logger.error(f"TTS upload error: {e}")
 
-    # ── Phase 5b: generate report on game_over ───────────────────────────
+    # ── Phase 5b: generate summary + report on game_over ──────────────────
+    summary_data = None
     report_data = None
     if blood_bar_data and blood_bar_data.get("game_over"):
-        await send_ai_status({
-            "stage": "report",
-            "message": "Generating dialogue report",
-        })
         # Refresh session to get latest messages
         chat_sess = await chat_session_manager.get_session(chat_sess.session_id)
         if chat_sess:
             report_scene_key = f"{scene}:{sub_type}" if sub_type else scene
+
+            # Step 1: Generate short summary first and send immediately
+            await send_ai_status({
+                "stage": "summary",
+                "message": "Generating summary",
+            })
+            summary_data = await _generate_dialogue_summary(
+                llm, chat_sess, report_scene_key,
+                status_callback=send_ai_status,
+            )
+            if summary_data:
+                await send_ws_json({
+                    "type": "summary_ready",
+                    "data": {
+                        "chat_session_id": chat_sess.session_id,
+                        "summary": summary_data.get("summary", ""),
+                    },
+                })
+
+            # Step 2: Generate full report
+            await send_ai_status({
+                "stage": "report",
+                "message": "Generating dialogue report",
+            })
             report_data = await _generate_dialogue_report(
                 llm, chat_sess, report_scene_key,
                 status_callback=send_ai_status,
@@ -839,6 +889,8 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
     }
     if blood_bar_data:
         done_data["blood_bar"] = blood_bar_data
+    if summary_data:
+        done_data["summary"] = summary_data.get("summary", "")
     if report_data:
         done_data["report"] = report_data
 
