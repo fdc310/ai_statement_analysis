@@ -284,6 +284,47 @@ async def websocket_streaming_chat(
                             })
                             logger.info(f"Dialogue manually ended: {chat_session_id}")
 
+                        elif msg_type == "hint_request":
+                            # Generate reply hint for the user
+                            if not chat_session_id:
+                                await websocket.send_json({
+                                    "type": "error",
+                                    "message": "No active chat session",
+                                })
+                                continue
+
+                            from app.services.chat.session_manager import (
+                                chat_session_manager as _csm,
+                            )
+                            from app.services import get_llm_service as _get_llm
+
+                            _chat_sess = await _csm.get_session(chat_session_id)
+                            if not _chat_sess:
+                                await websocket.send_json({
+                                    "type": "error",
+                                    "message": "Chat session not found or expired",
+                                })
+                                continue
+
+                            _llm = _get_llm()
+                            _scene = config.scene if config else ""
+                            _sub_type = config.sub_type if config else ""
+                            _hint_scene = f"{_scene}:{_sub_type}" if _sub_type else _scene
+
+                            _hint = await _generate_reply_hint(
+                                _llm, _chat_sess, _hint_scene,
+                            )
+
+                            await websocket.send_json({
+                                "type": "hint_ready",
+                                "data": {
+                                    "chat_session_id": chat_session_id,
+                                    "tips": _hint.get("tips", []) if _hint else [],
+                                    "example": _hint.get("example", "") if _hint else "",
+                                },
+                            })
+                            logger.info(f"Reply hint generated for session: {chat_session_id}")
+
                         else:
                             await websocket.send_json({
                                 "type": "error",
@@ -327,6 +368,91 @@ async def websocket_streaming_chat(
                 await session.finish()
             except Exception as e:
                 logger.error(f"WS chat session cleanup error: {e}")
+
+
+# ── Reply hint prompt ─────────────────────────────────────────────────────
+
+_HINT_SYSTEM_PROMPT = """你是一位专业的对话教练。用户正在进行情景对话练习，现在需要你给出回复提示。
+
+当前场景：{scene}
+
+你的任务是根据对话上下文，给用户提供回复建议，帮助用户知道如何回应对方。
+
+要求：
+1. 分析对方（AI）的最后一条消息，理解对方在问什么/期待什么
+2. 给出3条简短的回复要点（每条10-20字）
+3. 给出一个完整的示例回复（50-100字）
+4. 提示要贴合当前场景，实用可操作
+5. 示例回复要自然、专业、符合场景话术
+
+你必须严格返回以下JSON格式，不要返回任何其他内容：
+{{
+  "tips": ["要点1", "要点2", "要点3"],
+  "example": "完整的示例回复"
+}}"""
+
+
+async def _generate_reply_hint(
+    llm_service,
+    chat_sess,
+    scene: str,
+    status_callback=None,
+) -> Optional[dict]:
+    """Generate reply hint based on current conversation context."""
+    try:
+        from app.services.agents.prompts.common import extract_json
+
+        messages = chat_sess.messages or []
+        if not messages:
+            return None
+
+        # Build dialogue history
+        dialogue_lines = []
+        for m in messages[-6:]:  # Last 6 messages for context
+            role = "用户" if m.get("role") == "user" else "AI"
+            dialogue_lines.append(f"{role}：{m.get('content', '')}")
+        dialogue_text = "\n".join(dialogue_lines)
+
+        # Get scene name
+        from app.services.agents.prompts.scenario_report import _get_scene_config
+        scene_config = _get_scene_config(scene)
+        scene_name = scene_config["name"]
+
+        system_prompt = _HINT_SYSTEM_PROMPT.format(scene=scene_name)
+        user_prompt = f"""以下是对话记录：
+{dialogue_text}
+
+请根据对话上下文，给用户下一步回复提供提示建议。"""
+
+        messages_for_llm = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        result = await llm_service.chat(
+            messages_for_llm,
+            temperature=0.5,
+            status_callback=status_callback,
+        )
+        content = result.get("content", "").strip()
+        parsed = extract_json(content)
+        if not parsed:
+            return None
+
+        tips = parsed.get("tips", [])
+        example = parsed.get("example", "")
+
+        # Validate structure
+        if not isinstance(tips, list) or len(tips) == 0:
+            return None
+
+        return {
+            "tips": tips[:5],  # Max 5 tips
+            "example": example,
+        }
+
+    except Exception as e:
+        logger.error(f"Reply hint generation error: {e}", exc_info=True)
+        return None
 
 
 _BLOOD_BAR_SCENE_CRITERIA = {

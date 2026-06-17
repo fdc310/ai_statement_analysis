@@ -194,6 +194,60 @@ When `enable_blood_bar=true` and HP reaches 0 (either through accumulated damage
 
 The `blood_bar.game_over` field will be `true`, and the `report` field will contain the evaluation.
 
+## Reply Hint
+
+During the dialogue, the user can request a reply hint when they don't know how to respond.
+
+### Client sends
+
+```json
+{
+  "type": "hint_request"
+}
+```
+
+### Server responds
+
+```json
+{
+  "type": "hint_ready",
+  "data": {
+    "chat_session_id": "chat-context-session-id",
+    "tips": [
+      "先说明延期原因,表达负责态度",
+      "再给出当前进展和补救措施",
+      "最后明确新的完成时间"
+    ],
+    "example": "这次延期主要是因为技术细节需要额外处理,目前我们已经安排团队加快推进,预计明天完成核心模块,并在后天交给你版本。"
+  }
+}
+```
+
+- `tips`: Array of 3-5 short tips (10-20 chars each) explaining how to structure the reply
+- `example`: A complete example reply (50-100 chars) that the user can reference or modify
+
+The hint is generated based on the current conversation context and scene type.
+
+## Summary Ready
+
+When the dialogue ends (either by game over or manual end), the server first sends a short summary before the full report.
+
+### Server sends (before report)
+
+```json
+{
+  "type": "summary_ready",
+  "data": {
+    "chat_session_id": "chat-context-session-id",
+    "summary": "表达清晰有条理，但缺乏数据支撑"
+  }
+}
+```
+
+- `summary`: A 20-30 character summary of the user's overall performance
+
+This message is sent before `chat_done` (game over) or `dialogue_ended` (manual end), allowing the frontend to display the summary immediately while the full report is being generated.
+
 ## Report Format
 
 The `report.detail` object contains the full evaluation:
