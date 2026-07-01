@@ -787,6 +787,7 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
     tts_collected_chunks: list[bytes] = []
     tts_error_holder: list[str] = []
     llm_full_text: list[str] = []
+    stop_generation_event = asyncio.Event()
     tts_stop_event = threading.Event()
     loop = asyncio.get_running_loop()
 
@@ -798,6 +799,20 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
         import time as _time
 
         listener = _ChatTTSListener()
+
+        def _forward_tts_audio():
+            """Forward audio chunks as soon as the SDK listener receives them."""
+            while True:
+                chunk = listener._audio_queue.get()
+                if chunk is None:
+                    break
+                tts_collected_chunks.append(chunk)
+                put_tts_audio({"audio": base64.b64encode(chunk).decode("utf-8")})
+            put_tts_audio(None)
+
+        audio_forwarder = threading.Thread(target=_forward_tts_audio, daemon=True)
+        audio_forwarder.start()
+
         synthesizer = FlowingSpeechSynthesizer(
             int(settings.tencent_appid),
             Credential(settings.tencent_secret_id, settings.tencent_secret_key),
@@ -812,7 +827,8 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
         synthesizer.start()
         if not synthesizer.wait_ready(10000):
             logger.error("TTS persistent connection not ready within 10s")
-            put_tts_audio(None)
+            listener._audio_queue.put(None)
+            audio_forwarder.join(timeout=2.0)
             return
 
         logger.info("TTS persistent connection ready")
@@ -845,23 +861,15 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
             logger.error(f"TTS complete() failed: {e}")
 
         synthesizer.wait()
-
-        while True:
-            try:
-                chunk = listener._audio_queue.get(timeout=0.5)
-                if chunk is None:
-                    break
-                tts_collected_chunks.append(chunk)
-                put_tts_audio({"audio": base64.b64encode(chunk).decode("utf-8")})
-            except queue.Empty:
-                break
+        if audio_forwarder.is_alive():
+            listener._audio_queue.put(None)
+        audio_forwarder.join(timeout=2.0)
 
         if listener._error:
             logger.error(f"TTS error: {listener._error}")
             tts_error_holder.append(listener._error)
 
         logger.info("TTS persistent connection closed")
-        put_tts_audio(None)
 
     async def run_llm_stream():
         """Stream LLM response, send llm_delta to client, feed TTS on sentence boundaries."""
@@ -872,6 +880,9 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
                 temperature=0.7,
                 status_callback=send_ai_status,
             ):
+                if stop_generation_event.is_set():
+                    break
+
                 llm_full_text.append(delta)
                 sentence_buffer += delta
 
@@ -896,10 +907,12 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
                             if to_send.strip():
                                 tts_text_queue.put_nowait(to_send)
 
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error(f"LLM stream error: {e}")
         finally:
-            if enable_tts:
+            if enable_tts and not stop_generation_event.is_set():
                 if sentence_buffer.strip():
                     tts_text_queue.put_nowait(sentence_buffer)
                 tts_text_queue.put_nowait(None)
@@ -915,23 +928,56 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
             except Exception as e:
                 logger.error(f"send_tts_chunks error: {e}")
 
+    async def run_blood_bar_eval():
+        """Evaluate HP beside LLM streaming and notify the client early."""
+        if not (config.enable_blood_bar and chat_sess.enable_blood_bar):
+            return None
+
+        blood_scene_key = f"{scene}:{sub_type}" if sub_type else scene
+        try:
+            data = await _evaluate_blood_bar(
+                llm, blood_scene_key, user_text, chat_sess.hp,
+                status_callback=send_ai_status,
+            )
+            if not data:
+                return None
+
+            await chat_session_manager.update_hp(
+                chat_sess.session_id,
+                data["delta"],
+                data.get("reason", ""),
+            )
+            await send_ws_json({
+                "type": "blood_bar",
+                "data": {
+                    "chat_session_id": chat_sess.session_id,
+                    **data,
+                },
+            })
+            return data
+        except Exception as e:
+            logger.error(f"Blood bar task error: {e}", exc_info=True)
+            return None
+
+    def stop_tts_input():
+        if not enable_tts:
+            return
+        tts_stop_event.set()
+        while not tts_text_queue.empty():
+            try:
+                tts_text_queue.get_nowait()
+            except queue.Empty:
+                break
+        tts_text_queue.put_nowait(None)
+
     # ── Phase 3: blood bar evaluation (BEFORE LLM response) ─────────────
     blood_bar_data = None
     game_over = False
-    if config.enable_blood_bar and chat_sess.enable_blood_bar:
-        blood_scene_key = f"{scene}:{sub_type}" if sub_type else scene
-        # Evaluate based on user_text and conversation history (before AI response)
-        blood_bar_data = await _evaluate_blood_bar(
-            llm, blood_scene_key, user_text, chat_sess.hp,
-            status_callback=send_ai_status,
-        )
-        if blood_bar_data:
-            await chat_session_manager.update_hp(
-                chat_sess.session_id,
-                blood_bar_data["delta"],
-                blood_bar_data.get("reason", ""),
-            )
-            game_over = blood_bar_data.get("game_over", False)
+    blood_task = (
+        asyncio.create_task(run_blood_bar_eval())
+        if config.enable_blood_bar and chat_sess.enable_blood_bar
+        else None
+    )
 
     # ── Phase 4: LLM stream + optional TTS (skip if game_over) ─────────
     assistant_text = ""
@@ -995,25 +1041,45 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
         llm_task = asyncio.create_task(run_llm_stream())
 
         try:
-            await llm_task
+            if blood_task is None:
+                await llm_task
+            else:
+                done, _ = await asyncio.wait(
+                    {llm_task, blood_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if blood_task in done:
+                    blood_bar_data = await blood_task
+                    game_over = bool(blood_bar_data and blood_bar_data.get("game_over"))
+                    if game_over and not llm_task.done():
+                        logger.info("Game over detected, stopping in-flight LLM response")
+                        stop_generation_event.set()
+                        stop_tts_input()
+                        llm_task.cancel()
+                        try:
+                            await llm_task
+                        except asyncio.CancelledError:
+                            pass
+                    elif not llm_task.done():
+                        await llm_task
+                else:
+                    await llm_task
+                    blood_bar_data = await blood_task
+                    game_over = bool(blood_bar_data and blood_bar_data.get("game_over"))
+
             if tts_sender is not None:
                 await tts_sender
         except asyncio.CancelledError:
-            if enable_tts:
-                tts_stop_event.set()
-                while not tts_text_queue.empty():
-                    try:
-                        tts_text_queue.get_nowait()
-                    except queue.Empty:
-                        break
-                tts_text_queue.put_nowait(None)
+            stop_generation_event.set()
+            stop_tts_input()
             raise
 
         assistant_text = "".join(llm_full_text)
 
         # ── Phase 5: update session, upload audio ────────────────────────
         await chat_session_manager.append_message(chat_sess.session_id, "user", user_text)
-        await chat_session_manager.append_message(chat_sess.session_id, "assistant", assistant_text)
+        if assistant_text:
+            await chat_session_manager.append_message(chat_sess.session_id, "assistant", assistant_text)
 
         if enable_tts and tts_collected_chunks and not tts_error_holder:
             try:
@@ -1029,6 +1095,41 @@ async def _handle_end(websocket: WebSocket, session: StreamingSession, config: S
                     tts_url = upload_result.get("url")
             except Exception as e:
                 logger.error(f"TTS upload error: {e}")
+
+        if game_over:
+            chat_sess = await chat_session_manager.get_session(chat_sess.session_id)
+            if chat_sess:
+                report_scene_key = f"{scene}:{sub_type}" if sub_type else scene
+
+                await send_ai_status({
+                    "stage": "summary",
+                    "message": "Generating summary",
+                })
+                summary_data = await _generate_dialogue_summary(
+                    llm, chat_sess, report_scene_key,
+                    status_callback=send_ai_status,
+                )
+                if summary_data:
+                    await send_ws_json({
+                        "type": "summary_ready",
+                        "data": {
+                            "chat_session_id": chat_sess.session_id,
+                            "summary": summary_data.get("summary", ""),
+                        },
+                    })
+
+                await send_ai_status({
+                    "stage": "report",
+                    "message": "Generating dialogue report",
+                })
+                report_data = await _generate_dialogue_report(
+                    llm, chat_sess, report_scene_key,
+                    status_callback=send_ai_status,
+                )
+                if report_data:
+                    await chat_session_manager.end_session(
+                        chat_sess.session_id, report_data
+                    )
 
     done_data = {
         "session_id": result.session_id,
